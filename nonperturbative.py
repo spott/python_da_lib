@@ -147,7 +147,7 @@ def sum_dipoles(df, dipoles):
 
 def get_stft_data(folder, t=None, name="All",
                   window_fn=flattop,
-                  cycles=5, freq=None, ra=[0, -1], filt=None, dt=5):
+                  cycles=6, freq=None, ra=[0, -1], filt=None, dt=10):
     if freq is None:
         freq = cycles
     if t is not None:
@@ -263,10 +263,48 @@ class Nonperturbative(object):
                     self.shape = line.split(" ")[1].strip()
                 if line.startswith("-laser_height"):
                     self.height = float(line.split(" ")[1])
-                # if line.startswith("-laser_dt "):
-                    # self.dt = float(line.split(" ")[1])
-        # self.data_ = None
-        # self.chi_ = None
+        self.time_ = None
+        self.ef_ = None
+        self.zeros_ = None
+        self.center_of_pulse_ = None
+
+    @property
+    def time(self):
+        if self.time_ is None:
+            try:
+                with open(os.path.join(self.folder, "time.dat"), 'rb') as time_f:
+                    time_f.seek(0, os.SEEK_END)
+                    timesize = time_f.tell() / 8
+                    time_f.seek(0)
+                    self.time_ = np.fromfile(time_f, 'd', -1)
+            except IOError:
+                with open(os.path.join(self.folder, "dipole.dat"), 'rb') as dipolef:
+                    dipolef.seek(0, os.SEEK_END)
+                    dipolesize = dipolef.tell() / 16
+                    self.time_ = np.linspace(
+                        0,
+                        dipolesize *
+                        self.dt,
+                        dipolesize,
+                        endpoint=False,
+                        dtype='d')
+        return self.time_
+
+    @property
+    def freq(self):
+        return atomic.from_wavelength(self.wavelength)
+
+    @property
+    def zeros(self):
+        if self.zeros_ is None:
+            self.efield()
+        return self.zeros_
+
+    @property
+    def center_of_pulse(self):
+        if self.center_of_pulse_ is None:
+            self.efield()
+        return self.center_of_pulse_
 
     @property
     def data(self):
@@ -308,14 +346,6 @@ class Nonperturbative(object):
             else:
                 raise Exception("wanted value <" + str(wanted) + "> not known")
         return self.chi_
-
-    # def dipole_t(self):
-        # with open(os.path.join(self.folder, "dipole.dat"), 'rb') as f:
-        # dp = np.fromfile(f, 'd', -1)
-        # with open(os.path.join(self.folder, "time.dat"), 'rb') as f:
-        # time = np.fromfile(f, 'd', -1)
-
-        # return (time, dp)
 
     def dipole(self, window=None, t=None):
         """
@@ -414,42 +444,41 @@ class Nonperturbative(object):
         """
         returns a Fourier object of the efield of the run.
         """
-        try:
-            with open(os.path.join(self.folder, "time.dat"), 'rb') as time_f:
-                time = np.fromfile(time_f, 'd', -1)
-        except IOError:
-            with open(os.path.join(self.folder, "dipole.dat"), 'rb') as dipolef:
-                dipolef.seek(0, os.SEEK_END)
-                dipolesize = dipolef.tell() / 16
-            time = np.linspace(
-                0, dipolesize * self.dt, dipolesize, endpoint=False, dtype='d')
-            # ef = np.append(ef, np.zeros(dipolesize - len(ef), dtype='d'))
+        if self.ef_ is None:
+            try:
+                with open(os.path.join(self.folder, "efield.dat"), 'rb') as ef_file:
+                    ef = np.fromfile(ef_file, 'd', -1)
+            except IOError:
+                if self.shape == "gaussian":
+                    fwhm_time = np.pi * 2 * self.cycles / freq
+                    mean = fwhm_time * np.sqrt(np.log(1. / self.height))
+                    mean /= (2. * np.sqrt(np.log(2.)))
+                    std_dev = fwhm_time / np.sqrt(8. * np.log(2.))
+                    ef = np.exp(- (self.time - mean) ** 2 / (2. * std_dev ** 2))
+                    ef *= np.sin(freq * self.time)
+                    ef = ef * np.sqrt(self.intensity / atomic.intensity)
+                elif self.shape == "sin_squared":
+                    ef = np.sin(freq * self.time / (self.cycles * 2)) ** 2
+                    ef *= np.sin(freq * self.time)
+                    ef = ef * np.sqrt(self.intensity / atomic.intensity)
+            if np.shape(self.time) != np.shape(ef):
+                ef = np.append(
+                    ef, np.zeros(len(self.time) - len(ef), dtype='d'))
 
-        try:
-            with open(os.path.join(self.folder, "efield.dat"), 'rb') as ef_file:
-                ef = np.fromfile(ef_file, 'd', -1)
-        except IOError:
-            freq = atomic.from_wavelength(self.wavelength)
+            # find the peak and zeros of the efield:
+            signs = np.sign(ef)
+            signs[signs == 0.0] = -1
+            self.zeros_ = np.where(np.diff(signs))[0]
             if self.shape == "gaussian":
-                fwhm_time = np.pi * 2 * self.cycles / freq
-                mean = fwhm_time * np.sqrt(np.log(1. / self.height))
-                mean /= (2. * np.sqrt(np.log(2.)))
-                std_dev = fwhm_time / np.sqrt(8. * np.log(2.))
-                ef = np.exp(- (time - mean) ** 2 / (2. * std_dev ** 2))
-                ef *= np.sin(freq * time)
-                ef = ef * np.sqrt(self.intensity / atomic.intensity)
+                self.center_of_pulse_ = self.time[int(len(self.time) / 2)]
             elif self.shape == "sin_squared":
-                ef = np.sin(freq * time / (self.cycles * 2)) ** 2
-                ef *= np.sin(freq * time)
-                ef = ef * np.sqrt(self.intensity / atomic.intensity)
-        if np.shape(time) != np.shape(ef):
-            ef = np.append(ef, np.zeros(len(time) - len(ef), dtype='d'))
-        print("efield shape:", np.shape(ef))
-        print("time shape:", np.shape(time))
+                self.center_of_pulse_ = np.pi * self.cycles / self.freq
+            self.ef_ = ef
+
         if window:
-            return fourier.Fourier(time, ef, window)
+            return fourier.Fourier(self.time, self.ef_, window)
         else:
-            return fourier.Fourier(time, ef, self.window)
+            return fourier.Fourier(self.time, self.ef_, self.window)
 
     def harmonic(self, order=1, window=scipy.signal.boxcar, dipoles=None):
         """
@@ -532,3 +561,16 @@ class Nonperturbative(object):
         absorbed = 1 - wavefn.apply(lambda x: abs(x) ** 2).sum()
         return absorbed + \
             wavefn.apply(lambda x: abs(x) ** 2).query('e > 0').sum()
+
+    def stft(self, t=None, name="All", window_fn=flattop,
+             cycles=6, freq=None, ra=[0, -1], filt=None, dt=10):
+        return get_stft_data(
+            self.folder,
+            t,
+            name,
+            window_fn,
+            cycles,
+            freq,
+            ra,
+            filt,
+            dt)
