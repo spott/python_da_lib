@@ -3,6 +3,7 @@
 import numpy as np
 import os
 import pandas as pd
+import scipy as s
 import math
 import functools as ft
 import struct
