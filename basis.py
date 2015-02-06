@@ -8,7 +8,6 @@ import pandas as pd
 from common import get_file
 
 
-
 class Basis(object):
 
     """
@@ -36,7 +35,8 @@ class Basis(object):
         """
         filename = os.path.join(self.folder, "l_" + str(l) + ".dat")
         with open(filename, 'rb') as wf_file:
-            npy = np.fromfile(wf_file, 'd', (n - (l)) * self.points)[-self.points:]
+            npy = np.fromfile(
+                wf_file, 'd', (n - (l)) * self.points)[-self.points:]
         return npy
 
     def prototype(self):
@@ -63,4 +63,5 @@ class Basis(object):
             j.append(float(a['j'] / 2.))
             m.append(a['m'])
             e.append(a['e'])
-        return pd.MultiIndex.from_arrays([n, l, j, m, e], names=["n", "l", "j", "m", "e"])
+        return pd.MultiIndex.from_arrays(
+            [n, l, j, m, e], names=["n", "l", "j", "m", "e"])
