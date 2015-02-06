@@ -56,3 +56,10 @@ def frange(limit1, limit2=None, increment=1.):
 
     count = int(math.ceil(limit2 - limit1) / increment)
     return (limit1 + n * increment for n in range(count))
+
+
+def limits(df, over_under=.05):
+    upper = np.max(df)
+    lower = np.min(df)
+    range_ = upper - lower
+    return (lower - over_under * range_, upper + over_under * range_)
