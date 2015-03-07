@@ -395,7 +395,6 @@ class Nonperturbative(object):
                                     ".dat"))
                         else:
                             files.append((fun, "dipole_" + f + ".dat"))
-        print(files)
         print(self.folder)
         dp = np.zeros(timesize, dtype='d')
         for func, f in files:
