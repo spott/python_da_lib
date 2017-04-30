@@ -36,27 +36,29 @@ class PerturbativeSet(object):
             self.nmax = []
             self.npoints = []
             basedir = folder
-            is_folder = lambda x: os.path.isdir(os.path.join(folder, x))
-            for rmax in filter(is_folder, os.listdir(folder)):
-                folder = os.path.join(basedir, rmax)
-                for npoints in filter(is_folder, os.listdir(folder)):
-                    folder = os.path.join(basedir, rmax, npoints)
+            #is_folder = lambda x: os.path.isdir(os.path.join(folder, x))
+            is_folder = lambda x: x.is_dir()
+            for rmax in filter(is_folder, os.scandir(folder)):
+                folder = rmax.path #os.path.join(basedir, rmax)
+                for npoints in filter(is_folder, os.scandir(folder)):
+                    folder = npoints.path #os.path.join(basedir, rmax, npoints)
                     for nmax_folder in filter(
-                            lambda x: x.count("nonlinear") == 1
+                            lambda x: x.name.count("nonlinear") == 1
                             and is_folder(x),
-                            os.listdir(folder)):
-                        folder = os.path.join(
-                            basedir, rmax, npoints, nmax_folder)
+                            os.scandir(folder)):
+                        folder = nmax_folder.path#os.path.join(
+                            #basedir, rmax, npoints, nmax_folder.name)
+                        print(folder)
                         if "frequencies.dat" in os.listdir(folder):
                             try:
-                                self.rmax += [int(rmax)]
-                                self.nmax += [int(nmax_folder.split("_")[0])]
-                                self.npoints += [int(npoints)]
+                                self.rmax += [int(rmax.name)]
+                                self.nmax += [int(nmax_folder.name.split("_")[0])]
+                                self.npoints += [int(npoints.name)]
                                 # try:
                                 d = PerturbativeSet.perturbative(folder,
-                                                                 rmax,
-                                                                 npoints,
-                                                                 nmax_folder.split("_")[0])
+                                                                 rmax.name,
+                                                                 npoints.name,
+                                                                 nmax_folder.name.split("_")[0])
                                 if self.data is None:
                                     self.data = d
                                 else:
@@ -125,12 +127,19 @@ class PerturbativeSet(object):
         return data
         # self.data.columns.set_levels =
 
-    def chis(self, freq="0.056"):
+    def chis(self, freq="0.056", rmax=None, nmax=None, points=None):
         """return all the chis"""
+        if rmax is None:
+            rmax = max(self.data.columns.get_level_values('rmax'))
+        if points is None:
+            points = max(self.data[rmax].columns.get_level_values('npoints'))
+        if nmax is None:
+            nmax = max(self.data[rmax][points].columns.get_level_values('nmax'))
+
         chis_df = self.data.xs(freq, level="frequency")
-        chis_df = chis_df.xs(max(self.nmax), level="nmax", axis=1)
-        chis_df = chis_df.xs(max(self.npoints), level="npoints", axis=1)
-        return chis_df[max(self.rmax)].iloc[-1].T
+        chis_df = chis_df.xs(nmax, level="nmax", axis=1)
+        chis_df = chis_df.xs(points, level="npoints", axis=1)
+        return chis_df[rmax].iloc[-1].T
 
     def dnwm(self, freq="0.056"):
         """return the degenerate n wave mixing terms of the chis"""
@@ -159,14 +168,14 @@ class PerturbativeSet(object):
 
         return pd.DataFrame(nlchis, index=intensities)
 
-    def chi_vs_intensity(self, intensities, freq="0.056", harmonic=1, averaged=True):
+    def chi_vs_intensity(self, intensities, freq="0.056", harmonic=1, averaged=True, **kwargs):
         """ takes a list of intensities, a frequency (as a x.xxx string), the
         harmonic order that is desired, and if it will be averaged intensity or
         not
         returns a dataframe with index as the intensities, and rows as the chi
         for that intensity as sums over chi_n for n = harmonic to n = max"""
         chis = {}
-        data = self.chis(freq)
+        data = self.chis(freq, **kwargs)
         if harmonic == 1:
             labels = FIRST_HARMONIC_LABELS
         else:
