@@ -24,7 +24,7 @@ rank = PETSc.COMM_WORLD.getRank()
 
 if rank == 0:
     logging.basicConfig(
-        format=f"[{rank}]:" + '%(levelname)s:%(message)s', level=logging.INFO)
+        format="[{}]:".format(rank) + '%(levelname)s:%(message)s', level=logging.INFO)
 
 prototype_index = None
 prototype = None
@@ -160,8 +160,9 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200]):
     n_1_mask = n_1_mask_.getSubVector(is_2)
     l_3_mask = l_3_mask_.getSubVector(is_1)
 
-    # logging.info(f"psi_0: size: {psi_0.getSize()}")
-    # logging.info(f"vec is: \n{ print_vec(psi_0, prototype_index) }")
+    logging.info(f"psi_0_whole: size: {psi_0_whole.getSize()}")
+    logging.info(f"prototype: size: {prototype_index.shape}")
+    logging.info(f"vec is: \n{ print_vec(psi_0_whole) }")
     # logging.info(f"psi_1: size: {psi_1.getSize()}")
     # logging.info(f"vec is: \n{ print_vec(psi_1, prototype_index) }")
     # logging.info(f"psi_2: size: {psi_2.getSize()}")
@@ -203,7 +204,7 @@ class Wavefunction:
             assert(self.mask.size == self.H.size)
 
     def __repr__(self):
-        return f"{self.name}: \nprint_vec(self.psi, self.prototype)"
+        return "{}: \n{}".format(self.name, print_vec(self.psi_whole))
 
     def mask(self):
         if self.mask:
@@ -261,7 +262,7 @@ class Interval:
         return not self.a == self.b
 
     def __repr__(self):
-        return f"<Interval: ({self.a}, {self.b})>"
+        return "<Interval: ({}, {})>".format(self.a,self.b)
 
     def __lt__(self, other):
         return self.a < other.a
@@ -372,11 +373,11 @@ class Integration_Tree:
             Interval(a + (i - 1) * h, a + i * h) for i in range(1, steps + 1)
         ]
 
-        logging.info(f"{self.order}" + " " * self.depth(
-        ) + f"Finding children for interval {self.limits}, with I = {self.I}, with h: {h}, for Node {self}, for wavefunction: {self.psi.name}"
+        logging.info(str(self.order) + " " * self.depth(
+        ) + "Finding children for interval {}, with I = {}, with h: {}, for Node {}, for wavefunction: {}".format(self.limits, self.I, h, self, self.psi.name)
                      )
-        logging.info(f"{self.order}" + " " * self.depth(
-        ) + f" need intervals: {intervals} for order: {order}, sets: {sets}, h: {h}, total_coefficients: {total_coefficients}, locs: {locs}, loc_sets: {loc_sets}"
+        logging.info(str(self.order) + " " * self.depth(
+        ) + " need intervals: {} for order: {}, sets: {}, h: {}, total_coefficients: {}, locs: {}, loc_sets: {}".format(intervals,order,sets,h,total_coefficients,locs,loc_sets)
                      )
 
         #logging.debug(f"psi is: {self.psi}")
@@ -447,7 +448,7 @@ class Integration_Tree:
 
         self.is_converged(sum(Is))
 
-        logging.info(f"{self.order}" + " " * self.depth() + f"is converged {self.converged} for interval {self.limits}")
+        logging.info(str(self.order) + " " * self.depth() + "is converged {} for interval {}".format(self.converged,self.limits))
         self.I = sum(Is)
 
         #logging.debug("free parents:")
@@ -468,8 +469,8 @@ class Integration_Tree:
         if self.I is None:
             return False
         self.converged = self.convergence_criteria(I2, self.I, self.limits, self.psi.prototype)
-        logging.info(f"{self.order}" + " " * self.depth(
-        ) + f"converged? {self.converged!r}, {self.limits}, order: {self.order}"
+        logging.info(str(self.order) + " " * self.depth(
+        ) + "converged? {}, {}, order: {}".format(repr(self.converged), self.limits,self.order)
                      )
         return self.converged
 
@@ -516,7 +517,7 @@ class Integration_Tree:
             return self
         elif not self.children:
             raise IndexError(
-                "interval: {interval} not below this node: {self!r}")
+                "interval: {} not below this node: {}".format(interval,repr(self)))
         for child in children:
             if interval in self.child:
                 return self.children[0][interval]
@@ -537,7 +538,7 @@ class Integration_Tree:
         if not isinstance(interval, Interval):
             interval = Interval(interval)
         if interval not in self.limits:
-            raise IndexError(f"interval: {interval} not below this node")
+            raise IndexError("interval: {interval} not below this node".format(interval))
         if interval == self.limits:
             #logging.debug(f"found as self returning breadth_first_sum")
             return self.breadth_first_sum()
@@ -577,14 +578,14 @@ class Integration_Tree:
             return 0
 
     def repr_helper(self, level=0):
-        rep = f"<Node: {self.I}, limits: {self.limits}, order: {self.order}"
+        rep = "<Node: {}, limits: {}, order: {}".format(self.I,self.limits,self.order)
         repend = "\t" * level if self.children else ""
         repend += ">" if not self.children else ""
         repc = ""
         if self.children:
             for i, child in enumerate(self.children):
                 repc = "\n" + '\t' * (
-                    level + 1) + f"{i}: {child.repr_helper(level+1)},"
+                    level + 1) + "{i}: {c},".format(i=i,c = child.repr_helper(level+1))
             repc += ">"
         return rep + repc + repend
 
@@ -650,8 +651,8 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
             #     logging.info(f"max absolute error for {interval} is {m_abs} compared to max {m} is {m_abs/m} at {loc_abs}, average is {avg_abs} and norm is {norm_abs} goal is {err_goal_abs}")
             #else:
             logging.info(
-                f"max relative error for {interval} is {m_rel}, average is {avg_rel} and norm is {norm_rel} goal is {err_goal_rel}")
-            logging.info(f"max absolute error for {interval} is {m_abs} compared to max {m} is {m_abs/m}, average is {avg_abs} and norm is {norm_abs} goal is {err_goal_abs}")
+                "max relative error for {} is {}, average is {} and norm is {} goal is {}".format(interval,m_rel,avg_rel,norm_rel,err_goal_rel))
+            logging.info("max absolute error for {} is {} compared to max {} is {}, average is {} and norm is {} goal is {}".format(interval, m_abs, m, m_abs/m, avg_abs, norm_abs, err_goal_abs))
         # if mask_ is not None:
         #     error.pointwiseMult(error, mask_)
         #     i, m_rel = error.max()
@@ -697,14 +698,14 @@ def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs):
                 integrand=f,
                 order=o)
         I_of_n[o].generate_children_to_convergence()
-        logging.info(f"I_of_n[o]: {I_of_n[o]}")
+        logging.info("I_of_n[o]: {}".format(I_of_n[o]))
         #logging.info(f"psi: {print_vec(psi)}")
         logging.info(
-            f"\n\n\n\n\n\n\n===============================================\n\n\n\n\n\n\n"
+            "\n\n\n\n\n\n\n===============================================\n\n\n\n\n\n\n"
         )
     for o, psi in zip(count(1), psis[1:]):
-        logging.info(f"I_of_n[o]: {I_of_n[o]}")
-        logging.info(f"psi: {psi}")
+        logging.info("I_of_n[o]: {}".format(I_of_n[o]))
+        logging.info("psi: {}".format(psi))
         psi.psi += I_of_n[o].breadth_first_sum()
 
 
@@ -736,7 +737,7 @@ def basis_vec_to_df_on_zero(v, prototype):
         return None
 
 
-def print_vec(v, index=None):
+def print_vec(v):
     ##logging.debug(f"entering 'print_vec' with argument {v}")
     vs = vector_to_array_on_zero(v)
     #if rank == 0:
@@ -744,14 +745,14 @@ def print_vec(v, index=None):
     if rank == 0:
         if len(vs) == 1:
             vs = vs[0]
+        logging.info("vs size: {}".format(vs.shape))
         df = pd.Series(vs).T
         ##logging.debug(f"df shape: {df.shape}")
-        if index is not None:
-            ##logging.debug(f"index shape: {index.shape}")
-            df.index = index
-        else:
-            ##logging.debug(f"index shape: {prototype_index.shape}")
-            df.index = prototype_index
+        # if index is not None:
+        #     logging.info("index shape: {index.shape}".format(index=index))
+        #     df.index = index
+        logging.info("index shape: {}".format(prototype_index.shape))
+        df.index = prototype_index
         ##logging.debug("leaving 'print_vec'")
         return df.loc[df != 0]
     ##logging.debug("leaving 'print_vec'")
@@ -776,8 +777,8 @@ def check_phase_change(v1, v2, prototype):
         return prototype[i2], m2
 
 
-def format_phase_change(pc):
-    return f"( { pc[0][0] }, { pc[0][1] }, {float(np.real(pc[0][4])):.2g} ): {pc[1]: 1.2e}"
+# def format_phase_change(pc):
+#     return "( { pc[0][0] }, { pc[0][1] }, {float(np.real(pc[0][4])):.2g} ): {pc[1]: 1.2e}"
 
 
 class gen_integrand:
@@ -842,9 +843,8 @@ def run_perturbation_calculation_recurse(D,
 
         norms = [p.psi_whole.norm() for p in psis]
         if (i % 1 == 0 or i in zero_indices) and rank == 0:
-            print(f"step: {i}, ef: {efi:1.2e}, t: {ti:4.1f}, "
-                  f" psi_1_norm: {norms[1]:1.2e}, "
-                  f"psi_2_norm: {norms[2]:1.2e}, psi_3_norm: {norms[3]:1.2e} ")
+            print("step: {}, ef: {:1.2e}, t: {:4.1f},  psi_1_norm: {:1.2e}, ".format(i,efi,ti,norms[1])
+                  + "psi_2_norm: {:1.2e}, psi_3_norm: {:1.2e} ".format(norms[2], norms[3]))
         if i % save_steps == 0:
             z = psis[1].psi_whole.copy()
             pop_at_zero[(1, i)] = vector_to_array_on_zero(z)
@@ -872,7 +872,7 @@ def setup_and_run(hamiltonian_folder, efield_folder, output_folder, key):
     options.update(initialize_objects(hamiltonian_folder))
     #logging.debug(f"rank: {rank} initialized objects")
     if rank == 0:
-        print(f"zeros: {options['zero_indices']}")
+        print("zeros: {}".format(options['zero_indices']))
     global prototype_index
     # prototype_index = options["prototype"][1]
 
@@ -890,7 +890,7 @@ def setup_and_run(hamiltonian_folder, efield_folder, output_folder, key):
         intensity = da.Abinitio(efield_folder).laser.intensity
         cycles = da.Abinitio(efield_folder).laser.cycles
         if not key:
-            key = f"p_{intensity:1.1e}_{cycles}".replace("+", "")
+            key = "p_{:1.1e}_{}".format(intensity,cycles).replace("+", "")
         key_run = key + "_run"
         pop_df = pd.DataFrame(pop_at_zero, index=prototype_index)
         pop_df.to_hdf(join(output_folder, "perturbative.hdf"), key=key_run)
