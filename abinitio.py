@@ -453,7 +453,7 @@ class Abinitio(object):
             hop = int(dt / (self.time[1] - self.time[0]))
         elif hop is None:
             hop = int(round(dt_cycle_frac * window_size / cycles))
-        print(f"hop is {hop} and dt_cycle_frac is {dt_cycle_frac}")
+        print("hop is {hop} and dt_cycle_frac is {dt_cycle_frac}".format(hop=hop,dt_cycle_frac=dt_cycle_frac))
 
         dipoles = [self.dipole.dipole(x) for x in self.dipole.names]
 
@@ -515,9 +515,9 @@ class Abinitio(object):
 
                 if name != "all" and (s1 != s2):
                     name_ = "%s + %s^*" % (name,
-                                           f"{s2[0]}{s1[0]}_{s2[1]}{s1[1]}")
+                                           "{s2[0]}{s1[0]}_{s2[1]}{s1[1]}".format(s2=s2,s1=s1))
             elif name != "all" and (s1 != s2):
-                name_ = "%s + %s^*" % (name, f"{s2[0]}{s1[0]}")
+                name_ = "%s + %s^*" % (name, "{s2[0]}{s1[0]}".format(s2=s2,s1=s1))
             self.susceptibilities[name_] = self.data[name] / self.data[
                 "efield"]
         self.susceptibilities["efield"] = self.data["efield"]
