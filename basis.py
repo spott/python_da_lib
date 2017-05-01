@@ -9,7 +9,6 @@ from common import get_file
 
 
 class Basis(object):
-
     """
     Basis class represents a basis.
 
@@ -29,39 +28,60 @@ class Basis(object):
         self.grid = get_file(os.path.join(folder, "grid.dat"))
         self.points = len(self.grid)
 
-    def wf(self, n, l):
+    def wf(self, n, l, memmap=False):
         """ takes the principle quantum number and the angular quantum number
         and returns the wavefunction.
         """
         filename = os.path.join(self.folder, "l_" + str(l) + ".dat")
-        with open(filename, 'rb') as wf_file:
-            npy = np.fromfile(
-                wf_file, 'd', (n - (l)) * self.points)[-self.points:]
+        if not memmap:
+            with open(filename, 'rb') as wf_file:
+
+                npy = np.fromfile(wf_file, 'd',
+                                  (n - (l)) * self.points)[-self.points:]
+        else:
+            return np.memmap(
+                filename,
+                dtype='d',
+                mode='r',
+                offset=(n - l - 1) * self.points * 8,
+                shape=self.points)
         return npy
 
     def prototype(self):
         """ internal ish function that grabs the binary file prototype.dat, and
         puts it into the right data_structure"""
         filename = os.path.join(self.folder, "prototype.dat")
-        dt = np.dtype([('n', np.int32), ('l', np.int32), ('j', np.int32),
-                       ('m', np.int32), ('e', np.complex128)])
-        with open(filename, 'rb') as prototype_file:
-            npy = np.fromfile(prototype_file, dt)
-        return npy
+        return import_prototype_from_file(filename)
 
     def get_prototype(self):
         """ returns a multiindex for the basis."""
-        n = []
-        l = []
-        j = []
-        m = []
-        e = []
-        prototype_f = self.prototype()
-        for a in prototype_f:
-            n.append(a['n'])
-            l.append(a['l'])
-            j.append(float(a['j'] / 2.))
-            m.append(a['m'])
-            e.append(a['e'])
-        return pd.MultiIndex.from_arrays(
-            [n, l, j, m, e], names=["n", "l", "j", "m", "e"])
+        return prototype_as_multiindex(self.prototype())
+
+    def __hash__(self):
+        return hash(self.folder)
+
+
+def import_prototype_from_file(filename):
+    """ internal ish function that grabs the binary file prototype.dat, and
+    puts it into the right data_structure"""
+    dt = np.dtype([('n', np.int32), ('l', np.int32), ('j', np.int32),
+                    ('m', np.int32), ('e', np.complex128)])
+    with open(filename, 'rb') as prototype_file:
+        npy = np.fromfile(prototype_file, dt)
+    return npy
+
+def prototype_as_multiindex(prototype):
+    n = []
+    l = []
+    j = []
+    m = []
+    e = []
+    prototype
+    for a in prototype:
+        n.append(a['n'])
+        l.append(a['l'])
+        j.append(float(a['j'] / 2.))
+        m.append(a['m'])
+        e.append(a['e'].real)
+    return pd.MultiIndex.from_arrays(
+        [n, l, j, m, e], names=["n", "l", "j", "m", "e"])

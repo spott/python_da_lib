@@ -12,6 +12,12 @@ import numpy as np
 import struct
 
 
+def file_size(filename):
+    with open(filename, 'rb') as f:
+        f.seek(0, os.SEEK_END)
+        return f.tell()
+
+
 def get_file(filename, dtype='d'):
     '''Imports a binary file.
 

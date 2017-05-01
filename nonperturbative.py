@@ -5,31 +5,30 @@ nonperturbative.py:
 """
 
 from __future__ import print_function, division
+import sys
 import numpy as np
 import os
+
+from os import walk
 import pandas as pd
 import scipy.signal
 from common import import_petsc_vec
 from units import atomic
-import sys
 from window import *
-
 
 import fourier
 
 
 class NonperturbativeSet(object):
-
     '''A set of nonperturbative (full TDSE) runs,
     specifically their chi values.  '''
 
-    def __init__(
-            self,
-            folder,
-            n=1,
-            wanted="susceptibility",
-            window=scipy.signal.boxcar,
-            dipoles=None):
+    def __init__(self,
+                 folder,
+                 n=1,
+                 wanted="susceptibility",
+                 window=scipy.signal.boxcar,
+                 dipoles=None):
         self.data = None
         self.folders = []
         self.n = n
@@ -37,38 +36,34 @@ class NonperturbativeSet(object):
         self.dipoles = dipoles
 
         if wanted not in [
-                "susceptibility",
-                "peak_dipole",
-                "efield",
-                "integrated_harmonic_power",
-                "peak_harmonic_power"]:
+                "susceptibility", "peak_dipole", "efield",
+                "integrated_harmonic_power", "peak_harmonic_power"
+        ]:
             raise Exception("wanted value <" + str(wanted) + "> not known")
 
         self.wanted = wanted
 
-        os.path.walk(folder, NonperturbativeSet.__visit, self)
+        for root, dirs, files in walk(folder):
+            self.visit(os.path.join(root), files)
+
         self.data = self.data.groupby(self.data.index).sum()
 
         self.data.sort_index(inplace=True)
 
-    def __visit(self, dirname, names):
+    def visit(self, dirname, names):
         """ a helper function for the directory walk """
+        print("in directory:", dirname)
         if "wf_final.dat" not in names:
             return
         if self.data is None:
             self.data = pd.DataFrame(
-                Nonperturbative(
-                    dirname,
-                    self.n,
-                    self.wanted,
-                    self.window,
-                    self.dipoles).data)
+                Nonperturbative(dirname, self.n, self.wanted, self.window,
+                                self.dipoles).data)
             self.folders.append([dirname])
         else:
-            new_data = Nonperturbative(
-                dirname, self.n, self.wanted, self.window, self.dipoles).data
-            self.data = pd.concat(
-                [self.data, new_data])
+            new_data = Nonperturbative(dirname, self.n, self.wanted,
+                                       self.window, self.dipoles).data
+            self.data = pd.concat([self.data, new_data])
             self.folders.append([dirname])
 
     def nl_chis(self):
@@ -103,8 +98,8 @@ class NonperturbativeSet(object):
         ionization = {}
         for i in self.folders:
             run = self.Nonperturbative(i[0])
-            ionization[(run.intensity, run.wavelength, run.cycles)] = float(
-                run.ionization(zero))
+            ionization[(run.intensity, run.wavelength,
+                        run.cycles)] = float(run.ionization(zero))
         index = pd.MultiIndex.from_tuples(
             ionization.keys(), names=["intensity", "wavelength", "cycles"])
         return pd.DataFrame(ionization.values(), index=index).sort_index()
@@ -145,22 +140,33 @@ def sum_dipoles(df, dipoles):
     return pd.DataFrame(data.sum(axis=1), columns=[name])
 
 
-def get_stft_data(folder, t=None, name="All",
+def get_stft_data(run,
+                  t=None,
+                  name="All",
                   window_fn=flattop,
-                  cycles=6, freq=None, ra=[0, -1], filt=None, dt=10):
-    if freq is None:
-        freq = cycles
-    if t is not None:
-        print("calculating for " + folder + " " + str(t) + ", " +
-              window_fn.name + " cycles: " + str(cycles) + "...")
-    elif t is None:
-        print("calculating for " + folder + " All, " +
-              window_fn.name + " cycles: " + str(cycles) + "...")
+                  cycles=6,
+                  freq=None,
+                  ra=[0, -1],
+                  filt=None,
+                  dt=10):
 
     print("importing folder...", end="")
     sys.stdout.flush()
-    run = Nonperturbative(folder)
+    if type(run) == str:
+        run = Nonperturbative(run)
+    elif type(run) is not 'Nonperturbative':
+        raise TypeError
     print("done.")
+    # freq is the index of frequency we are interested in.
+    if freq is None:
+        freq = cycles
+    if t is not None:
+        print("calculating for " + run.folder + " " + str(t) + ", " +
+              window_fn.name + " cycles: " + str(cycles) + "...")
+    elif t is None:
+        print("calculating for " + run.folder + " All, " + window_fn.name +
+              " cycles: " + str(cycles) + "...")
+
 
     period = 2. * np.pi / atomic.from_wavelength(run.wavelength)
 
@@ -183,52 +189,52 @@ def get_stft_data(folder, t=None, name="All",
     print("window: ", window, " jump: ", jump)
     print("find stft for dipole...", end="")
     sys.stdout.flush()
-    time, td_dipole = dipole.stft(window, jump,
-                                  window_fn=window_fn,
-                                  ra=ra, filt=filt)
+    time, td_dipole = dipole.stft(
+        window, jump, window_fn=window_fn, ra=ra, filt=filt)
     print("done")
     print("find stft for efield...", end="")
     sys.stdout.flush()
-    _, td_ef = efield.stft(window, jump,
-                           window_fn=window_fn,
-                           ra=ra, filt=filt)
+    _, td_ef = efield.stft(window, jump, window_fn=window_fn, ra=ra, filt=filt)
     print("done")
 
     run_df = pd.DataFrame.from_dict({
         "dipole": td_dipole.T[freq],
         "efield": td_ef.T[freq],
-        "susceptibility": td_dipole.T[freq] / td_ef.T[freq]})
+        "susceptibility": td_dipole.T[freq] / td_ef.T[freq]
+    })
 
     run_df.index = pd.Index(time, name="time")
     window_fn = window_fn.name
     filt = "None" if filt is None else filt
     run_df.columns = pd.MultiIndex.from_tuples(
-        [(run.intensity, window_fn, filt,
-          freq, cycles, name, "dipole"),
-         (run.intensity, window_fn, filt,
-          freq, cycles, name, "efield"),
-         (run.intensity, window_fn, filt,
-          freq, cycles, name, "susceptibility")],
-        names=["intensity", "windowing function", "filter",
-               "freq", "cycle", "decomp", "value"])
+        [(run.intensity, window_fn, filt, freq, cycles, name, "dipole"),
+         (run.intensity, window_fn, filt, freq, cycles, name,
+          "efield"), (run.intensity, window_fn, filt, freq, cycles, name,
+                      "susceptibility")],
+        names=[
+            "intensity", "windowing function", "filter", "freq", "cycle",
+            "decomp", "value"
+        ])
     print("done")
     return run_df
 
 
 class Nonperturbative(object):
-
     """ nonperturbative object representing a single nonperturbative run
     allows access to properties of the run, and to calculations done on
     the run
     """
 
-    def __init__(
-            self,
-            folder,
-            n=1,
-            wanted="susceptibility",
-            window=scipy.signal.boxcar,
-            dipoles=None):
+    def __init__(self,
+                 folder,
+                 n=1,
+                 wanted="susceptibility",
+                 window=scipy.signal.boxcar,
+                 dipoles=None):
+        self.data_ = None
+        self.chi_ = None
+        self.dipoles = dipoles
+        self.n = n
         self.window = window
         self.wanted = wanted
         if not os.path.exists(os.path.join(folder, "wf_final.dat")):
@@ -239,7 +245,7 @@ class Nonperturbative(object):
             self.intensity = float()
             line_of_interest = str()
             for line in que_file:
-                if line.startswith("mpirun"):
+                if line.startswith("mpirun") or line.startswith("srun"):
                     line_of_interest = line
             line_of_interest = line_of_interest.replace('\t', '   ')
             for element in line_of_interest.split('    '):
@@ -252,7 +258,10 @@ class Nonperturbative(object):
             self.wavelength = float()
             self.shape = "sin_squared"
             self.height = float(0)
+            self.intensity = float()
             for line in laser_conf:
+                if line.startswith("-laser_intensity"):
+                    self.intensity = float(line.split(" ")[1])
                 if line.startswith("-laser_cycles"):
                     self.cycles = int(line.split(" ")[1])
                 if line.startswith("-laser_lambda"):
@@ -263,6 +272,15 @@ class Nonperturbative(object):
                     self.shape = line.split(" ")[1].strip()
                 if line.startswith("-laser_height"):
                     self.height = float(line.split(" ")[1])
+
+        with open(os.path.join(folder, "Dipole.config"), 'r') as laser_conf:
+            self.decompositions = []
+            for line in laser_conf:
+                if line.startswith("-dipole_decomposition"):
+                    self.decompositions += list(map(
+                        lambda x: int(x),
+                        line.split(" ")[1].strip(',\n').split(",")))
+
         self.time_ = None
         self.ef_ = None
         self.zeros_ = None
@@ -272,19 +290,20 @@ class Nonperturbative(object):
     def time(self):
         if self.time_ is None:
             try:
-                with open(os.path.join(self.folder, "time.dat"), 'rb') as time_f:
+                with open(os.path.join(self.folder, "time.dat"),
+                          'rb') as time_f:
                     time_f.seek(0, os.SEEK_END)
                     timesize = time_f.tell() / 8
                     time_f.seek(0)
                     self.time_ = np.fromfile(time_f, 'd', -1)
             except IOError:
-                with open(os.path.join(self.folder, "dipole.dat"), 'rb') as dipolef:
+                with open(os.path.join(self.folder, "dipole.dat"),
+                          'rb') as dipolef:
                     dipolef.seek(0, os.SEEK_END)
                     dipolesize = dipolef.tell() / 16
                     self.time_ = np.linspace(
                         0,
-                        dipolesize *
-                        self.dt,
+                        dipolesize * self.dt,
                         dipolesize,
                         endpoint=False,
                         dtype='d')
@@ -321,27 +340,29 @@ class Nonperturbative(object):
     def chi(self):
         if self.chi_ is None:
             if self.wanted == "susceptibility":
-                self.chi_ = self.harmonic(n, self.window, dipoles=dipoles)
+                self.chi_ = self.harmonic(
+                    self.n, self.window, dipoles=self.dipoles)
             elif self.wanted == "peak_dipole":
-                self.chi_ = self.dipole(self.window, t=dipoles)(
-                    n * atomic.from_wavelength(self.wavelength))
+                self.chi_ = self.dipole(
+                    self.window, t=self.dipoles)(
+                        self.n * atomic.from_wavelength(self.wavelength))
             elif self.wanted == "peak_harmonic_power":
                 self.chi_ = np.square(
                     np.abs(
                         self.dipole(
-                            self.window,
-                            t=dipoles)(
-                            n *
-                            atomic.from_wavelength(
-                                self.wavelength))))
+                            self.window, t=self.dipoles)
+                        (self.n * atomic.from_wavelength(self.wavelength))))
             elif self.wanted == "efield":
                 self.chi_ = self.efield(self.window)(
-                    n * atomic.from_wavelength(self.wavelength))
+                    self.n * atomic.from_wavelength(self.wavelength))
             elif self.wanted == "integrated_harmonic_power":
-                self.chi_ = self.dipole(self.window, t=dipoles).integrated_freq(
-                    lambda x: np.abs(x) ** 2,
-                    ((n - 1) * atomic.from_wavelength(self.wavelength)),
-                    ((n + 1) * atomic.from_wavelength(self.wavelength)))
+                self.chi_ = self.dipole(
+                    self.window, t=self.dipoles).integrated_freq(
+                        lambda x: np.abs(x)**2, (
+                            (self.n - 1) *
+                            atomic.from_wavelength(self.wavelength)), (
+                                (self.n + 1) *
+                                atomic.from_wavelength(self.wavelength)))
 
             else:
                 raise Exception("wanted value <" + str(wanted) + "> not known")
@@ -363,42 +384,45 @@ class Nonperturbative(object):
         try:
             with open(os.path.join(self.folder, "time.dat"), 'rb') as time_f:
                 time_f.seek(0, os.SEEK_END)
-                timesize = time_f.tell() / 8
+                timesize = int(time_f.tell() / 8)
                 time_f.seek(0)
                 time = np.fromfile(time_f, 'd', -1)
         except IOError:
-            with open(os.path.join(self.folder, "dipole.dat"), 'rb') as dipolef:
+            with open(os.path.join(self.folder, "Dipole.dat"),
+                      'rb') as dipolef:
                 dipolef.seek(0, os.SEEK_END)
-                dipolesize = dipolef.tell() / 16
+                dipolesize = int(dipolef.tell() / 16)
                 timesize = dipolesize
             time = np.linspace(
                 0, dipolesize * self.dt, dipolesize, endpoint=False, dtype='d')
 
         files = []
         if t is None:
-            files = [(ident, "dipole.dat")]
+            files = [(ident, "Dipole.dat")]
         if t is not None:
             if isinstance(t, str):
                 files = [(ident, "dipole_" + t + ".dat")]
             else:
                 for fun, f in t:
                     if (f is None):
-                        files.append((fun, "dipole.dat"))
+                        files.append((fun, "Dipole.dat"))
                     else:
                         if (f[0] > f[1]):
-                            files.append(
-                                (lambda x: fun(
-                                    np.conj(x)),
-                                    "dipole_" +
-                                    f[1] +
-                                    f[0] +
-                                    ".dat"))
+                            files.append((lambda x: fun(np.conj(x)),
+                                          "dipole_" + f[1] + f[0] + ".dat"))
                         else:
-                            files.append((fun, "dipole_" + f + ".dat"))
-        print(self.folder)
+                            files.append((fun, "Dipole_" + f + ".dat"))
+        print(self.folder, timesize)
         dp = np.zeros(timesize, dtype='d')
         for func, f in files:
-            with open(os.path.join(self.folder, f), 'rb') as dipolef:
+            ff = list(f)
+            print(os.path.exists(os.path.join(self.folder, f)))
+            if not os.path.exists(os.path.join(self.folder, f)):
+                if f[0] == 'd':
+                    ff[0] = 'D'
+                else:
+                    ff[0] = 'd'
+            with open(os.path.join(self.folder, "".join(ff)), 'rb') as dipolef:
                 dipolef.seek(0, os.SEEK_END)
                 dipolesize = dipolef.tell() / 8
                 dipolef.seek(0)
@@ -408,7 +432,7 @@ class Nonperturbative(object):
                     dp = np.subtract(dp, func(np.fromfile(dipolef, 'd', -1)))
                 else:
                     raise Exception(
-                        "dipole: dipole file does not have a filesize equal"
+                        "dipole: dipole file does not have a file size equal"
                         "to, or double that of the time file")
         # dp *= -1
         print(dp)
@@ -423,8 +447,10 @@ class Nonperturbative(object):
         "section" of the wavefunction that there is a dipole moment for.
         """
 
-        splits = set(''.join(map(lambda x: x[7:9], filter(
-            lambda x: x.startswith("dipole_"), os.listdir(self.folder)))))
+        splits = set(''.join(
+            map(lambda x: x[7:9],
+                filter(lambda x: x.startswith("dipole_"),
+                       os.listdir(self.folder)))))
 
         with open(os.path.join(self.folder, "population.dat"), 'rb') as pop:
             population = np.fromfile(pop, 'd', -1)
@@ -434,10 +460,7 @@ class Nonperturbative(object):
             time = np.fromfile(f, 'd', -1)
 
         return pd.DataFrame(
-            population,
-            index=time,
-            columns=sorted(
-                list(splits)))
+            population, index=time, columns=sorted(list(splits)))
 
     def efield(self, window=None):
         """
@@ -445,7 +468,8 @@ class Nonperturbative(object):
         """
         if self.ef_ is None:
             try:
-                with open(os.path.join(self.folder, "efield.dat"), 'rb') as ef_file:
+                with open(os.path.join(self.folder, "efield.dat"),
+                          'rb') as ef_file:
                     ef = np.fromfile(ef_file, 'd', -1)
             except IOError:
                 if self.shape == "gaussian":
@@ -453,16 +477,17 @@ class Nonperturbative(object):
                     mean = fwhm_time * np.sqrt(np.log(1. / self.height))
                     mean /= (2. * np.sqrt(np.log(2.)))
                     std_dev = fwhm_time / np.sqrt(8. * np.log(2.))
-                    ef = np.exp(- (self.time - mean) ** 2 / (2. * std_dev ** 2))
+                    ef = np.exp(-(self.time - mean)**2 / (2. * std_dev**2))
                     ef *= np.sin(freq * self.time)
                     ef = ef * np.sqrt(self.intensity / atomic.intensity)
                 elif self.shape == "sin_squared":
-                    ef = np.sin(freq * self.time / (self.cycles * 2)) ** 2
+                    ef = np.sin(freq * self.time / (self.cycles * 2))**2
                     ef *= np.sin(freq * self.time)
                     ef = ef * np.sqrt(self.intensity / atomic.intensity)
             if np.shape(self.time) != np.shape(ef):
                 ef = np.append(
-                    ef, np.zeros(len(self.time) - len(ef), dtype='d'))
+                    ef, np.zeros(
+                        len(self.time) - len(ef), dtype='d'))
 
             # find the peak and zeros of the efield:
             signs = np.sign(ef)
@@ -498,7 +523,8 @@ class Nonperturbative(object):
         j = []
         m = []
         e = []
-        with open(os.path.join(self.folder, "prototype.csv"), 'r') as prototype_f:
+        with open(os.path.join(self.folder, "prototype.csv"),
+                  'r') as prototype_f:
             for line in prototype_f:
                 i = line.split(',')
                 n.append(int(i[0]))
@@ -514,11 +540,8 @@ class Nonperturbative(object):
         """
         total_zeros = len(
             list(
-                filter(
-                    lambda x: x.find("wf_") != -
-                    1,
-                    os.listdir(
-                        self.folder))))
+                filter(lambda x: x.find("wf_") != -1, os.listdir(
+                    self.folder))))
         if zero == -1:
             wavefn = import_petsc_vec(
                 os.path.join(self.folder, "wf_final.dat"))
@@ -526,18 +549,14 @@ class Nonperturbative(object):
                 [(self.intensity, self.cycles * 2)],
                 names=["intensity", "zero"])
             return pd.DataFrame(
-                wavefn,
-                index=self.get_prototype(),
-                columns=cols)
+                wavefn, index=self.get_prototype(), columns=cols)
         elif zero < total_zeros - 1:
             wavefn = import_petsc_vec(
                 os.path.join(self.folder, "wf_" + str(zero) + ".dat"))
             cols = pd.MultiIndex.from_tuples(
                 [(self.intensity, zero)], names=["intensity", "zero"])
             return pd.DataFrame(
-                wavefn,
-                index=self.get_prototype(),
-                columns=cols)
+                wavefn, index=self.get_prototype(), columns=cols)
         else:
             raise Exception(zero, "n not less than ", total_zeros)
 
@@ -545,31 +564,30 @@ class Nonperturbative(object):
         """get the ground state population at the zero of the
         field represented by `zero`."""
         wavefn = self.wf(zero)
-        return wavefn.apply(lambda x: abs(x) ** 2).query('n == 1').iloc[0]
+        return wavefn.apply(lambda x: abs(x)**2).query('n == 1').iloc[0]
 
     def bound_population(self, zero=-1):
         """get the bound state population (including the gs) at
         the zero of the field represented by `zero`."""
         wavefn = self.wf(zero)
-        return wavefn.apply(lambda x: abs(x) ** 2).query('e < 0').sum()
+        return wavefn.apply(lambda x: abs(x)**2).query('e < 0').sum()
 
     def ionization(self, zero=-1):
         """get the ionized population at the zero of the
         field represented by `zero`."""
         wavefn = self.wf(zero)
-        absorbed = 1 - wavefn.apply(lambda x: abs(x) ** 2).sum()
+        absorbed = 1 - wavefn.apply(lambda x: abs(x)**2).sum()
         return absorbed + \
             wavefn.apply(lambda x: abs(x) ** 2).query('e > 0').sum()
 
-    def stft(self, t=None, name="All", window_fn=flattop,
-             cycles=6, freq=None, ra=[0, -1], filt=None, dt=10):
-        return get_stft_data(
-            self.folder,
-            t,
-            name,
-            window_fn,
-            cycles,
-            freq,
-            ra,
-            filt,
-            dt)
+    def stft(self,
+             t=None,
+             name="All",
+             window_fn=flattop,
+             cycles=6,
+             freq=None,
+             ra=[0, -1],
+             filt=None,
+             dt=10):
+        return get_stft_data(self.folder, t, name, window_fn, cycles, freq, ra,
+                             filt, dt)
