@@ -38,14 +38,13 @@ def find_zeros(t, x):
         list(np.intersect1d(positive, negative + 1)))
     return (zeros, t[zeros])
 
-@profile
-def perturb_order_petsc(psi, dipole, H, d_dot_an, ef, time):
+def perturb_order_petsc(psi, dipole, Hl, Hr, d_dot_an, ef, time):
     # exp(t) * dipole * E(t) * psi * exp1(t)
-    exp1 = H.copy()
+    exp1 = Hr.copy()
     exp1.scale(-1j * time)
     exp1.exp()
     exp1.pointwiseMult(exp1, psi)
-    exp = H.copy()
+    exp = Hl.copy()
     exp.scale(1j * time)
     exp.exp()
     d_dot_an = dipole.createVecLeft()
@@ -80,41 +79,60 @@ def vector_to_array_on_zero(vs):
 
 
 def initialize_objects(hamiltonian_folder, absorber_size=[200, 200]):
-    #logging.debug("entering 'initialize_objects'")
-    v = PETSc.Viewer().createBinary(
-        join(hamiltonian_folder, "dipole_matrix.dat.gz"), 'r')
-    D = PETSc.Mat().load(v)
-    v.destroy()
-    v = PETSc.Viewer().createBinary(
-        join(hamiltonian_folder, "energy_eigenvalues_vector.dat"), 'r')
-    H = PETSc.Vec().load(v)
-    psi_0 = D.createVecRight()
-    psi_0.setValue(0, 1)
-    psi_0.assemble()
-    psi_1 = D.createVecRight()
-    psi_1.set(0)
-    psi_1.assemble()
-    psi_2 = D.createVecRight()
-    psi_2.set(0)
-    psi_2.assemble()
-    psi_3 = D.createVecRight()
-    psi_3.set(0)
-    psi_3.assemble()
-    n_1_mask = D.createVecRight()
-    n_1_mask.set(1)
-    n_1_mask.setValue(0, 0)
-    l_3_mask = D.createVecRight()
-    l_3_mask.set(1)
-
     global prototype
     global prototype_index
     prototype = da.import_prototype_from_file(
         join(hamiltonian_folder, "vector_prototype.dat"))
     prototype_index = da.prototype_as_multiindex(prototype)
 
-    # if rank == 0:
-    #     #logging.debug("prototype_index")
-    #     #logging.debug(prototype_index)
+    v = PETSc.Viewer().createBinary(
+        join(hamiltonian_folder, "dipole_matrix.dat.gz"), 'r')
+    D = PETSc.Mat().load(v)
+    v.destroy()
+
+    l_0_list, l_1_list, l_2_list = [],[],[]
+    for i, (n,l,m,j,e) in enumerate(prototype):
+        if l == 0:
+            l_0_list += [i]
+        if l == 1:
+            l_1_list += [i]
+        if l == 2:
+            l_2_list += [i]
+    is_0 = PETSc.IS().createGeneral(l_0_list)
+    is_1 = PETSc.IS().createGeneral(l_1_list)
+    is_2 = PETSc.IS().createGeneral(l_2_list + l_0_list)
+
+    D_01 = D.createSubMatrix(is_1, is_0)
+    D_12 = D.createSubMatrix(is_2, is_1)
+    D_21 = D.createSubMatrix(is_1, is_2)
+
+    v = PETSc.Viewer().createBinary(
+        join(hamiltonian_folder, "energy_eigenvalues_vector.dat"), 'r')
+    H = PETSc.Vec().load(v)
+
+    H_0 = H.getSubVector(is_0)
+    H_1 = H.getSubVector(is_1)
+    H_2 = H.getSubVector(is_2)
+    H_3 = H.getSubVector(is_1)
+
+    psi_0_whole = D.createVecRight()
+    psi_0_whole.setValue(0, 1)
+    psi_0_whole.assemble()
+    psi_1_whole = D.createVecRight()
+    psi_1_whole.set(0)
+    psi_1_whole.assemble()
+    psi_2_whole = D.createVecRight()
+    psi_2_whole.set(0)
+    psi_2_whole.assemble()
+    psi_3_whole = D.createVecLeft()
+    psi_3_whole.set(0)
+    psi_3_whole.assemble()
+    n_1_mask_ = D.createVecLeft()
+    n_1_mask_.set(1)
+    n_1_mask_.setValue(0, 0)
+    l_3_mask_ = D.createVecLeft()
+    l_3_mask_.set(1)
+
 
     n_max = max([x[0] for x in prototype])
 
@@ -123,41 +141,78 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200]):
             if n_max - n < absorber_size[0]:
                 val = np.sin(
                     (n_max - n) * np.pi / (2 * absorber_size[0]))**(1)
-                n_1_mask.setValue(i, val)
+                n_1_mask_.setValue(i, val)
         if l == 2:
             if n_max - n < absorber_size[0]:
                 val = np.sin(
                     (n_max - n) * np.pi / (2 * absorber_size[0]))**(1)
-                n_1_mask.setValue(i, val)
+                n_1_mask_.setValue(i, val)
         if l == 1:
             if n_max - n < absorber_size[1]:
                 val = np.sin(
                     (n_max - n) * np.pi / (2 * absorber_size[1]))**(1)
-                l_3_mask.setValue(i, val)
+                l_3_mask_.setValue(i, val)
         if l == 3:
-            l_3_mask.setValue(i, 0)
-    n_1_mask.assemble()
-    l_3_mask.assemble()
+            l_3_mask_.setValue(i, 0)
+    n_1_mask_.assemble()
+    l_3_mask_.assemble()
 
-    #logging.debug(f"psi_0: size: {psi_0.getSize()}")
-    #logging.debug(f"vec is: \n{ print_vec(psi_0, prototype_index) }")
-    #logging.debug(f"psi_1: size: {psi_1.getSize()}")
-    #logging.debug(f"vec is: \n{ print_vec(psi_1, prototype_index) }")
-    #logging.debug(f"psi_2: size: {psi_2.getSize()}")
-    #logging.debug(f"vec is: \n{ print_vec(psi_2, prototype_index) }")
-    #logging.debug(f"psi_3: size: {psi_3.getSize()}")
-    #logging.debug(f"vec is: \n{ print_vec(psi_3, prototype_index) }")
+    n_1_mask = n_1_mask_.getSubVector(is_2)
+    l_3_mask = l_3_mask_.getSubVector(is_1)
+
+    # logging.info(f"psi_0: size: {psi_0.getSize()}")
+    # logging.info(f"vec is: \n{ print_vec(psi_0, prototype_index) }")
+    # logging.info(f"psi_1: size: {psi_1.getSize()}")
+    # logging.info(f"vec is: \n{ print_vec(psi_1, prototype_index) }")
+    # logging.info(f"psi_2: size: {psi_2.getSize()}")
+    # logging.info(f"vec is: \n{ print_vec(psi_2, prototype_index) }")
+    # logging.info(f"psi_3: size: {psi_3.getSize()}")
+    # logging.info(f"vec is: \n{ print_vec(psi_3, prototype_index) }")
+
+    psi_0 = Wavefunction(psi_0_whole, prototype_index, H_0, "psi_0", l_0_list)
+    psi_1 = Wavefunction(psi_1_whole, prototype_index, H_1, "psi_1", l_1_list)
+    psi_2 = Wavefunction(psi_2_whole, prototype_index, H_2, "psi_2", l_0_list + l_2_list, n_1_mask)
+    psi_3 = Wavefunction(psi_3_whole, prototype_index, H_3, "psi_3", l_1_list, l_3_mask)
+
 
     ret_dict = {
-        "D": D,
-        "H": H,
+        "D": [D_01, D_12, D_21],
         "psis": [psi_0, psi_1, psi_2, psi_3],
-        "masks": [n_1_mask, l_3_mask],
-        "prototype": (prototype, prototype_index)
     }
-    ##logging.debug(f"{ret_dict}")
-    #logging.debug("leaving 'initialize_object'")
+    # logging.debug(f"{ret_dict}")
+    # logging.debug("leaving 'initialize_object'")
     return ret_dict
+
+class Wavefunction:
+
+    def __init__(self, psi, prototype, H, name, is_list=None, mask=None):
+        self.prototype_whole = prototype
+        self.prototype = None
+        self.psi_whole = psi.copy()
+        self.H = H
+        self.psi = None
+        self.name = name
+        if is_list:
+            self.is_list = is_list
+            self.is_ = PETSc.IS().createGeneral(is_list)
+            self.psi = self.psi_whole.getSubVector(self.is_)
+            self.prototype = self.prototype_whole.take(is_list)
+        self.mask = mask
+        if mask:
+            assert(self.mask.size == self.psi.size)
+            assert(self.mask.size == self.H.size)
+
+    def __repr__(self):
+        return f"{self.name}: \nprint_vec(self.psi, self.prototype)"
+
+    def mask(self):
+        if self.mask:
+            self.psi.pointwiseMult(self.psi, self.mask)
+
+    def copy(self):
+        return Wavefunction(self.psi_whole, self.prototype_whole, self.H, self.name, self.is_list, self.mask)
+
+
 
 
 def get_efield(folder):
@@ -215,29 +270,22 @@ class Interval:
         return self.a > other.a
 
     def intersection(self, other):
-        #logging.debug(f"Interval::intersection: {self}, {other}")
         if self.b < other.a or self.a > other.b:
             return None
 
         if self.a <= other.a and self.b <= other.b:
-            #logging.debug(f"Interval::intersection: return {other.a},{self.b}")
             return Interval(other.a, self.b)
 
         if self.a <= other.a and self.b >= other.b:
-            #logging.debug(
-                #f"Interval::intersection: return {other.a},{other.b}")
             return Interval(other.a, other.b)
 
         if self.a >= other.a and self.b >= other.b:
-            #logging.debug(f"Interval::intersection: return {self.a},{other.b}")
             return Interval(self.a, other.b)
 
         if self.a >= other.a and self.b <= other.b:
-            #logging.debug(f"Interval::intersection: return {self.a},{self.b}")
             return Interval(self.a, self.b)
 
     def union(self, other):
-        #logging.debug(f"Interval::union: {self}, {other}")
         if self.b < other.a or self.a > other.b:
             return None
 
@@ -246,63 +294,16 @@ class Interval:
             max(self.a, self.b, other.a, other.b))
 
 
-class IntegrationMethod:
-    pass
-
-
-class Box(IntegrationMethod):
-    order = 1
-
-    @staticmethod
-    def __call__(vs, dt, step):
-        return vs[0] * dt
-
-
-class Trapezoid(IntegrationMethod):
-    order = 2
-
-    @staticmethod
-    def __call__(vs, dt, step):
-        return (vs[0] + vs[1]) * dt / 2
-
-
-class Simpsons(IntegrationMethod):
-    order = 3
-
-    @staticmethod
-    def __call__(vs, dt, step):
-        if step % 2 == 0:
-            return (vs[0] + vs[1] * 4 + vs[2]) * dt / 3
-        else:
-            return 0
-
-
-class Simpsons_3_8(IntegrationMethod):
-    order = 4
-
-    @staticmethod
-    def __call__(vs, dt, step):
-        if step % 3 == 0:
-            return (vs[0] + vs[1] * 3 + vs[2] * 3 + vs[3]) * dt * 3. / 8.
-        else:
-            return 0
-
-
 class DummyDict:
     def __init__(self, psi):
-        ##logging.debug(f"entering 'DummyDict::__init__' with argument {vector}")
-        self.vector = psi.duplicate()
+        self.vector = psi.psi.duplicate()
         self.vector.set(0)
         self.psi = psi.copy()
-        # #logging.debug(print_vec(self.vector))
-        # #logging.debug(f"leaving 'DummyDict::__init__'")
 
     def __getitem__(self, item):
         return self.vector
 
-    def find_or_make_child(self, i, f):
-        # #logging.debug("entering 'DummyDict::find_or_make_child': ")
-        # #logging.debug(print_vec(self.vector))
+    def find_or_make_child(self, i):
         return self.vector
 
 
@@ -312,6 +313,7 @@ class Integration_Tree:
                  convergence_criteria,
                  lower_order_tree,
                  psi,
+                 integrand,
                  parent=None,
                  I=None,
                  order=0,
@@ -328,11 +330,11 @@ class Integration_Tree:
         self.lower_order_tree = lower_order_tree
         self.order = order
         self.max_depth = max_depth
+        self.integrand = integrand
         self.psi = psi.copy()
         self.my_depth = None
 
-    @profile
-    def generate_children(self, f):
+    def generate_children(self):
         if self.children:
             return self.converged
         a, b = self.limits.a, self.limits.b
@@ -353,7 +355,7 @@ class Integration_Tree:
         # intervals = [
         #     Interval(a + (i - 1) * h, a + i * h) for i in range(1, steps + 1)
         # ]
-
+        f = self.integrand
         order = 3
         sets = 3
         steps = order * sets
@@ -371,7 +373,7 @@ class Integration_Tree:
         ]
 
         logging.info(f"{self.order}" + " " * self.depth(
-        ) + f"Finding children for interval {self.limits}, with I = {self.I}, with h: {h}, for Node {self}"
+        ) + f"Finding children for interval {self.limits}, with I = {self.I}, with h: {h}, for Node {self}, for wavefunction: {self.psi.name}"
                      )
         logging.info(f"{self.order}" + " " * self.depth(
         ) + f" need intervals: {intervals} for order: {order}, sets: {sets}, h: {h}, total_coefficients: {total_coefficients}, locs: {locs}, loc_sets: {loc_sets}"
@@ -392,9 +394,9 @@ class Integration_Tree:
         #             mask.setValue(i,0)
 
         def generate_psi():
-            diffs = [Im1.find_or_make_child(i, f) for i in intervals]
+            diffs = [Im1.find_or_make_child(i) for i in intervals]
             #logging.debug(f"diffs: { diffs }, { len(diffs) }")
-            last = Im1.psi
+            last = Im1.psi.psi
             for x in range(steps):
                 #last.pointwiseMult(last, mask)
                 yield last
@@ -436,13 +438,14 @@ class Integration_Tree:
                 self.convergence_criteria,
                 self.lower_order_tree,
                 self.psi,
+                self.integrand,
                 self,
                 I,
                 order=self.order)
             for x0, x1, I in zip(loc_sets, loc_sets[1:], Is))
         #logging.debug("made children")
 
-        self.is_converged(self.I, sum(Is))
+        self.is_converged(sum(Is))
 
         logging.info(f"{self.order}" + " " * self.depth() + f"is converged {self.converged} for interval {self.limits}")
         self.I = sum(Is)
@@ -451,31 +454,20 @@ class Integration_Tree:
         self.free_parents()
 
 
-        # if self.converged and all(child.converged for child in self.parent.children):
-        #     self.parent.converged = True
-        #     self.parent.I = sum(child.I for child in self.parent.children)
-        #logging.debug("leaving 'generate_children'")
         return self.converged
 
-    def generate_children_to_convergence(self, f):
+    def generate_children_to_convergence(self):
         #logging.debug(
             #f"entered 'generate_children_to_convergence' for {self}:")
-        if not self.generate_children(f) and self.depth() <= self.max_depth:
+        if not self.generate_children() and self.depth() <= self.max_depth:
             for child in self.children:
-                child.generate_children_to_convergence(f)
-        # elif not self.generate_children(f):
-        #     return self.children[0].generate_children_to_convergence(f) and self.children[1].generate_children_to_convergence(f)
-        # elif not self.children:
-        #     return self.children[0].generate_children_to_convergence(f) and self.children[1].generate_children_to_convergence(f)
-        # if not self.generate_children(f):
-        #     return self.children[0].generate_children_to_convergence(f) and self.children[1].generate_children_to_convergence(f)
-        #logging.debug("exiting 'generate_children_to_convergence'")
+                child.generate_children_to_convergence()
 
-    def is_converged(self, I1, I2):
+    def is_converged(self, I2):
         #logging.debug(f"entering 'is_converged' with {I2} for {self}")
         if self.I is None:
             return False
-        self.converged = self.convergence_criteria(I2, I1, self.limits)
+        self.converged = self.convergence_criteria(I2, self.I, self.limits, self.psi.prototype)
         logging.info(f"{self.order}" + " " * self.depth(
         ) + f"converged? {self.converged!r}, {self.limits}, order: {self.order}"
                      )
@@ -497,10 +489,6 @@ class Integration_Tree:
                 map(lambda x: x.children is not None,
                     self.parent.parent.children)):
             self.parent.parent.I.destroy()
-        # if parent is self.parent.parent.children[0] and self.parent.parent.children[1].children is not None:
-        #     self.parent.parent.I.destroy()
-        # elif parent is self.parent.parent.children[1] and self.parent.parent.children[0].children is not None:
-        #     self.parent.parent.I.destroy()
         else:
             return
 
@@ -544,7 +532,7 @@ class Integration_Tree:
         else:
             return any(map(lambda x: interval in x, self.children))
 
-    def find_or_make_child(self, interval, f):
+    def find_or_make_child(self, interval):
         #logging.debug(f"trying to find or make {interval} in {self}")
         if not isinstance(interval, Interval):
             interval = Interval(interval)
@@ -554,30 +542,26 @@ class Integration_Tree:
             #logging.debug(f"found as self returning breadth_first_sum")
             return self.breadth_first_sum()
         elif not self.children:
-            self.generate_children(f)
+            self.generate_children()
 
         #logging.debug(
         #     f"trying to find or make {interval} in {list(map(lambda x: x.limits, self.children))}"
         # )
         for child in self.children:
             if interval in child.limits:
-                return child.find_or_make_child(interval, f)
-        # if interval in self.children[0].limits:
-        #     return self.children[0].find_or_make_child(interval, f)
-        # if interval in self.children[1].limits:
-        #     return self.children[1].find_or_make_child(interval, f)
+                return child.find_or_make_child(interval)
+
 
         # it isn't in the limits of the children, but it is in the limits of self.
         # so, we need to ask
         return sum(
-            child.find_or_make_child(child.limits.intersection(interval), f)
+            child.find_or_make_child(child.limits.intersection(interval))
             for child in self.children)
 
         # raise IndexError(
         #     f"interval: {interval} failed, not in {self.children[0].limits} or {self.children[1].limits}, for node: {self!r}"
         # )
 
-    @profile
     def breadth_first_sum(self, interval=None):
         ##logging.debug(f"entering 'breadth_first_sum': with {interval}")
         if self.children is None and interval is None:
@@ -614,8 +598,7 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
         mask_ = mask
     order_ = order
 
-    @profile
-    def convergence_criteria(Ia, Ib, interval):
+    def convergence_criteria(Ia, Ib, interval, prototype_index = None):
         #logging.debug(
             #f"entering 'convergence_cirteria' with Ia: {Ia}, Ib: {Ib}")
         #logging.debug(f"Ia: ")
@@ -657,24 +640,30 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
 
         norm_rel = error.norm()
         if rank == 0:
-            loc_rel = prototype_index.get_level_values("n")[
-                i_rel], prototype_index.get_level_values("l")[i_rel]
-            loc_abs = prototype_index.get_level_values("n")[
-                i_abs], prototype_index.get_level_values("l")[i_abs]
+            # if prototype_index:
+            #     loc_rel = prototype_index.get_level_values("n")[
+            #         i_rel], prototype_index.get_level_values("l")[i_rel]
+            #     loc_abs = prototype_index.get_level_values("n")[
+            #         i_abs], prototype_index.get_level_values("l")[i_abs]
+            #     logging.info(
+            #         f"max relative error for {interval} is {m_rel} at {loc_rel}, average is {avg_rel} and norm is {norm_rel} goal is {err_goal_rel}")
+            #     logging.info(f"max absolute error for {interval} is {m_abs} compared to max {m} is {m_abs/m} at {loc_abs}, average is {avg_abs} and norm is {norm_abs} goal is {err_goal_abs}")
+            #else:
             logging.info(
-                f"max relative error for {interval} is {m_rel} at {loc_rel}, average is {avg_rel} and norm is {norm_rel} goal is {err_goal_rel}")
-            logging.info(f"max absolute error for {interval} is {m_abs} compared to max {m} is {m_abs/m} at {loc_abs}, average is {avg_abs} and norm is {norm_abs} goal is {err_goal_abs}")
-        if mask_ is not None:
-            error.pointwiseMult(error, mask_)
-            i, m_rel = error.max()
-            avg_rel = error.sum() / error.size
-            norm_rel = error.norm()
-            if rank == 0:
-                loc = prototype_index.get_level_values("n")[
-                    i], prototype_index.get_level_values("l")[i]
-                logging.info(
-                    f"after mask, max error for {interval} is {m_rel} at {loc}, average error is: {avg_rel} and norm is {norm_rel}"
-                    f"  err_goal is {err_goal_rel}")
+                f"max relative error for {interval} is {m_rel}, average is {avg_rel} and norm is {norm_rel} goal is {err_goal_rel}")
+            logging.info(f"max absolute error for {interval} is {m_abs} compared to max {m} is {m_abs/m}, average is {avg_abs} and norm is {norm_abs} goal is {err_goal_abs}")
+        # if mask_ is not None:
+        #     error.pointwiseMult(error, mask_)
+        #     i, m_rel = error.max()
+        #     avg_rel = error.sum() / error.size
+        #     norm_rel = error.norm()
+        #     if rank == 0:
+        #         if prototy
+        #         loc = prototype_index.get_level_values("n")[
+        #             i], prototype_index.get_level_values("l")[i]
+        #         logging.info(
+        #             f"after mask, max error for {interval} is {m_rel} at {loc}, average error is: {avg_rel} and norm is {norm_rel}"
+        #             f"  err_goal is {err_goal_rel}")
         if math.isnan(m_rel):
             raise Exception("nan!")
         if avg_abs / m < err_goal_rel or avg_abs < err_goal_abs:
@@ -686,9 +675,6 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
 
 
 def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs):
-    #logging.debug(
-        #f"entering 'recursive_integrate' with arguments: f: {fs}, psis: {psis}, limits: {limits}, err_goal_rel: {err_goal_rel}, err_goal_abs: {err_goal_abs}"
-    #)
 
     I_of_n = OrderedDict()
 
@@ -696,143 +682,33 @@ def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs):
     if 0 not in I_of_n:
         I_of_n[0] = DummyDict(psis[0])
 
-    # for o, ( psi, f ) in zip(count(1), psis[1:], fs)):
-    #     if o + 1 not in I_of_n:
-    #         convergence_func = convergence_criteria_gen(err_goal)
-    #         I_of_n[o + 1] = Integration_Tree(
-    #             limits=limits,
-    #             convergence_criteria=convergence_func,
-    #             lower_order_tree=I_of_n[o],
-    #             psi=psi,
-    #             order=o + 1)
-
     for o, psi, f in zip(count(1), psis[1:], fs):
         if o not in I_of_n:
-            if f.mask is not None:
-                convergence_func = convergence_criteria_gen(
-                    err_goal_rel, err_goal_abs, None, o)
-            else:
-                convergence_func = convergence_criteria_gen(err_goal_rel, err_goal_abs, None, o)
+            # if f.mask is not None:
+            #     convergence_func = convergence_criteria_gen(
+            #         err_goal_rel, err_goal_abs, None, o)
+            # else:
+            convergence_func = convergence_criteria_gen(err_goal_rel, err_goal_abs, None, o)
             I_of_n[o] = Integration_Tree(
                 limits=limits,
                 convergence_criteria=convergence_func,
                 lower_order_tree=I_of_n[o - 1],
                 psi=psi,
+                integrand=f,
                 order=o)
-        I_of_n[o].generate_children_to_convergence(f)
+        I_of_n[o].generate_children_to_convergence()
         logging.info(f"I_of_n[o]: {I_of_n[o]}")
-        logging.info(f"psi: {print_vec(psi)}")
+        #logging.info(f"psi: {print_vec(psi)}")
         logging.info(
             f"\n\n\n\n\n\n\n===============================================\n\n\n\n\n\n\n"
         )
     for o, psi in zip(count(1), psis[1:]):
         logging.info(f"I_of_n[o]: {I_of_n[o]}")
-        logging.info(f"psi: {print_vec(psi)}")
-        psi += I_of_n[o].breadth_first_sum()
+        logging.info(f"psi: {psi}")
+        psi.psi += I_of_n[o].breadth_first_sum()
 
 
-    # cleanup:
-    #logging.debug(f"leaving 'recursive_integrate' with arguments:")
     return psis
-
-
-# def recursive_integrate_single(f, psi, order, na, nb, err_goal, higher_I=None):
-#     h = (nb - na) / 4.
-
-#     o = order
-
-#     I_of_n = recursive_integrate.I_of_n
-
-#     I_of_n[o][na + 2 * h] = (
-#         f(na, psi) + f(na + h, psi + I_of_n[o - 1][na + h]) * 4 + f(
-#             na + 2 * h, psi + I_of_n[o - 1][na + 2 * h])) * (nb - na) / 3.
-#     # the integral of the second half of the range, which calls the
-#     I_of_n[o][nb] = (f(na + 2 * h, psi + I_of_n[o - 1][na + 2 * h]) +
-#                      f(na + 3 * h, psi + I_of_n[o - 1][na + 3 * h]) * 4 + f(
-#                          nb, psi + I_of_n[o - 1][nb])) * (nb - na) / 3.
-#     # the integral of the whole range for this order:
-#     Iab = I_of_n[o][na + 2 * h] + I_of_n[o][nb]
-
-#     # for this order, the error:
-#     if higher_I:
-#         error = higher_I - Iab
-#         error.abs()
-#         error /= abs(Iab)
-#         array = error.getArray()
-#         array = np.nan_to_num(array)
-#         error.setArray(array)
-#         _, m = error.max()
-#         if rank == 0:
-#             print(f"max error for integral between {na} and {nb} is {m}."
-#                   f"  err_goal is {err_goal}")
-#         if math.isnan(m):
-#             raise Exception("nan!")
-#         if m < err_goal:
-#             return Iab
-
-#     return recursive_integrate(f, psi, order, na, (na + nb) / 2, err_goal,
-#                                I_of_n[o][na + 2 * h]) + recursive_integrate(
-#                                    f, psi + I_of_n[o - 1][na + 2 * h], order,
-#                                    (na + nb) / 2, nb, err_goal, I_of_n[o][nb])
-
-# def recursive_integrate(fs, psis, na, nb, err_goal, higher_I=None):
-#     import math
-
-#     if higher_I is None:
-#         higher_I = [None for _ in psis]
-
-#     h = (nb - na) / 4.
-
-#     # zeroth order psi doesn't depend on time, so psi[1] doesn't
-#     # care about integrand time, but higher order psis do.
-
-#     # dict of OrderedDicts to hold the temporary values of the integration.
-#     # a static variable, will need to be cleaned up when we completely finish:
-#     I_of_n = recursive_integrate.I_of_n
-
-#     # this allows us to generalize the algorithm without special cases.
-#     if 0 not in I_of_n:
-#         I_of_n[0] = DummyDict(psis[0])
-
-#     # we skip the zeroth
-#     for o, (f, psi) in islice(enumerate(zip(fs, psis)), 1, None):
-#         # we build a orderedDict to hold the integrated points we find for
-#         # the perturbative order we are on:
-#         if o not in I_of_n:
-#             I_of_n[o] = OrderedDict()
-
-#         # the integral of the first half of the range
-#         I_of_n[o][na + 2 * h] = (
-#             f(na, psi) + f(na + h, psi + I_of_n[o - 1][na + h]) * 4 + f(
-#                 na + 2 * h, psi + I_of_n[o - 1][na + 2 * h])) * (nb - na) / 3.
-#         # the integral of the second half of the range, which calls the
-#         I_of_n[o][nb] = (f(na + 2 * h, psi + I_of_n[o - 1][na + 2 * h]) +
-#                          f(na + 3 * h, psi + I_of_n[o - 1][na + 3 * h]) * 4 +
-#                          f(nb, psi + I_of_n[o - 1][nb])) * (nb - na) / 3.
-#         # the integral of the whole range for this order:
-#         Iab = I_of_n[o][na + 2 * h] + I_of_n[o][nb]
-
-#         # for this order, the error:
-#         if higher_I:
-#             error = higher_I - Iab
-#             error.abs()
-#             error /= abs(Iab)
-#             array = error.getArray()
-#             array = np.nan_to_num(array)
-#             error.setArray(array)
-#             _, m = error.max()
-#             if rank == 0:
-#                 print(f"max error for integral between {na} and {nb} is {m}."
-#                       f"  err_goal is {err_goal}")
-#             if math.isnan(m):
-#                 raise Exception("nan!")
-#             if m < err_goal:
-#                 return Iab
-
-#         return recursive_integrate(f, psi, na, (na + nb) / 2, err_goal,
-#                                    I_of_n[na + 2 * h]) + recursive_integrate(
-#                                        f, psi + I_of_n[o - 1][na + 2 * h],
-#                                        (na + nb) / 2, nb, err_goal, I_of_n[nb])
 
 
 def copy_old_vectors(v):
@@ -905,17 +781,16 @@ def format_phase_change(pc):
 
 
 class gen_integrand:
-    def __init__(self, p, D, H, efield, time, mask=None, **kwargs):
-        self.v = p.duplicate()
-        self.dt = time[1] - time[0]
-        self.mask = None
-        if mask is not None:
-            self.mask = mask
-        self.ef_fn = kwargs["efield_fn"]
+    def __init__(self, psil, psir, D, efield, time, **kwargs):
         self.D = D
-        self.H = H
+        self.v = self.D.createVecLeft()
+        self.dt = time[1] - time[0]
+        self.psil = psil
+        self.psir = psir
+        # if mask is not None:
+        #     self.mask = mask
+        self.ef_fn = kwargs["efield_fn"]
 
-    @profile
     def __call__(self, n, dn, psi):
         #logging.debug(
             #f"entering 'integrand' with arguments n: {n}, dn: {dn} and psi: {psi}"
@@ -924,13 +799,13 @@ class gen_integrand:
         # #logging.debug(print_vec(psi))
         t = float(n * self.dt)
         ef = self.ef_fn(t)
-        #if rank == 0:
-            #logging.debug(
-                #f"integrand: n = {n}, time = {t}, dt = {self.dt}, ef = {ef}")
-        self.v = perturb_order_petsc(psi, self.D, self.H, self.v, ef,
+        # if rank == 0:
+        #     logging.info(
+        #         f"integrand: n = {n}, time = {t}, dt = {self.dt}, ef = {ef}, in_vec = {psi.size}, Hl= {self.psil.H.size}, Hr = {self.psir.H.size}")
+        self.v = perturb_order_petsc(psi, self.D, self.psil.H, self.psir.H, self.v, ef,
                                      t) * self.dt
-        if self.mask is not None:
-            self.v.pointwiseMult(self.v, self.mask)
+        if self.psil.mask is not None:
+            self.v.pointwiseMult(self.v, self.psil.mask)
         # #logging.debug(f"integrand: ")
         # #logging.debug(print_vec(vv))
         #logging.debug(f"leaving 'integrand'")
@@ -938,15 +813,12 @@ class gen_integrand:
 
 
 def run_perturbation_calculation_recurse(D,
-                                         H,
                                          psis,
-                                         masks,
                                          efield,
                                          time,
                                          zero_indices,
                                          steps=3*3,
                                          save_steps=1,
-                                         integration_method=Trapezoid(),
                                          **kwargs):
     #logging.debug(f"entering 'run_perturbation_calculation_recurse'")
     from itertools import islice
@@ -957,9 +829,9 @@ def run_perturbation_calculation_recurse(D,
         #logging.debug(f"psi[{i}]")
         #logging.debug(print_vec(psi))
 
-    integrands = [gen_integrand(psis[0], D, H, efield, time, **kwargs)] + [
-        gen_integrand(psis[0], D, H, efield, time, mask, **kwargs)
-        for mask in masks
+    integrands = [
+        gen_integrand(psil, psir, D, efield, time, **kwargs)
+        for D, psil, psir in zip(D, psis[1:], psis)
     ]
 
     for i, (efi, ti) in islice(
@@ -968,133 +840,21 @@ def run_perturbation_calculation_recurse(D,
         psis = recursive_integrate(integrands, psis,
                                    Interval(i - steps, i), 1e-3, 1e-16)
 
-        # temp = integration_method(v, dt, i)
-        # copy_old_vectors(v)
-        # v2[0] = recursive_integrate(integrand_1, i - steps, i, 1e-2)
-        # perturb_order_petsc(psis[1], D, H, v2[0], efi, ti)
-        # # remove the ground state...
-        # v2[0].pointwiseMult(v2[0], masks[0])
-        # temp = integration_method(v2, dt, i)
-        # phase[2] = check_phase_change(psis[2], temp, kwargs["prototype"][0])
-        # psis[2] += temp
-        # copy_old_vectors(v2)
-        # v3[0] = perturb_order_petsc(psis[2], D, H, v3[0], efi, ti)
-        # # remove l = 3 terms because they will be too large,
-        # v3[0].pointwiseMult(v3[0], masks[1])
-        # copy_old_vectors(v3)
-        # #psis[3] += (v3[0] + v3[1]) * dt * steps / 2
-        # # if i % 2 == 0:
-        # #     psis[3] += (v3[0] + v3[1] * 4 + v3[2]) * dt / 3
-        # temp = integration_method(v3, dt, i)
-        # phase[3] = check_phase_change(psis[3], temp, kwargs["prototype"][0])
-        # psis[3] += temp
-        norms = [p.norm() for p in psis]
+        norms = [p.psi_whole.norm() for p in psis]
         if (i % 1 == 0 or i in zero_indices) and rank == 0:
             print(f"step: {i}, ef: {efi:1.2e}, t: {ti:4.1f}, "
                   f" psi_1_norm: {norms[1]:1.2e}, "
                   f"psi_2_norm: {norms[2]:1.2e}, psi_3_norm: {norms[3]:1.2e} ")
-            #f"phases: {[format_phase_change(p) for p in phase[1:]]}")
-        # if i in zero_indices:
-        #     z = psis[1].copy()
-        #     pop_at_zero[(1, indexOf(i,zero_indices))] = vector_to_array_on_zero(z)
-        #     zz = psis[2].copy()
-        #     pop_at_zero[(2, indexOf(i,zero_indices))] = vector_to_array_on_zero(zz)
-        #     zzz = psis[3].copy()
-        #     pop_at_zero[(3, indexOf(i,zero_indices))] = vector_to_array_on_zero(zzz)
         if i % save_steps == 0:
-            z = psis[1].copy()
+            z = psis[1].psi_whole.copy()
             pop_at_zero[(1, i)] = vector_to_array_on_zero(z)
-            zz = psis[2].copy()
+            zz = psis[2].psi_whole.copy()
             pop_at_zero[(2, i)] = vector_to_array_on_zero(zz)
-            zzz = psis[3].copy()
+            zzz = psis[3].psi_whole.copy()
             pop_at_zero[(3, i)] = vector_to_array_on_zero(zzz)
         break
     return pop_at_zero
 
-
-# def run_perturbation_calculation(D,
-#                                  H,
-#                                  psis,
-#                                  masks,
-#                                  efield,
-#                                  time,
-#                                  zero_indices,
-#                                  steps=1,
-#                                  save_steps=10,
-#                                  integration_method=Trapezoid(),
-#                                  **kwargs):
-#     from itertools import islice
-#     dt = time[steps] - time[0]
-#     pop_at_zero = {}
-#     num_terms = integration_method.order
-#     v = [psis[0].duplicate() for x in range(0, num_terms)]
-#     [vv.set(0) for vv in v]
-#     v2 = [psis[2].duplicate() for x in range(0, num_terms)]
-#     [vv.set(0) for vv in v2]
-#     v3 = [psis[3].duplicate() for x in range(0, num_terms)]
-#     [vv.set(0) for vv in v3]
-
-#     temp = psis[0].duplicate()
-
-#     phase = [0 for _ in psis]
-#     integrand_0 = gen_integrand(psis[0], D, H, efield, time)
-#     for i, (efi, ti) in islice(
-#             enumerate(zip(efield, time)), None, None, steps):
-
-#         #v[0] = perturb_order_petsc(psis[0], D, H, v[0], efi, ti)
-
-#         v[0] = recursive_integrate(
-#             integrand_0,
-#             i - steps,
-#             i, )
-
-#         temp = integration_method(v, dt, i)
-#         phase[1] = check_phase_change(psis[1], temp, kwargs["prototype"][0])
-#         psis[1] += temp
-#         copy_old_vectors(v)
-#         v2[0] = perturb_order_petsc(psis[1], D, H, v2[0], efi, ti)
-#         # remove the ground state...
-#         v2[0].pointwiseMult(v2[0], masks[0])
-#         temp = integration_method(v2, dt, i)
-#         phase[2] = check_phase_change(psis[2], temp, kwargs["prototype"][0])
-#         psis[2] += temp
-#         copy_old_vectors(v2)
-#         v3[0] = perturb_order_petsc(psis[2], D, H, v3[0], efi, ti)
-#         # remove l = 3 terms because they will be too large,
-#         v3[0].pointwiseMult(v3[0], masks[1])
-#         copy_old_vectors(v3)
-#         #psis[3] += (v3[0] + v3[1]) * dt * steps / 2
-#         # if i % 2 == 0:
-#         #     psis[3] += (v3[0] + v3[1] * 4 + v3[2]) * dt / 3
-#         temp = integration_method(v3, dt, i)
-#         phase[3] = check_phase_change(psis[3], temp, kwargs["prototype"][0])
-#         psis[3] += temp
-#         norms = [v[0].norm(), v2[0].norm(), v3[0].norm()
-#                  ] + [p.norm() for p in psis]
-#         # diffs = [(v2[0] - psis[1]).norm(), (v3[0] - psis[2]).norm()]
-#         if (i % 1 == 0 or i in zero_indices) and rank == 0:
-#             print(f"rank: {rank}\t"
-#                   f"step: {i}, ef: {efi:1.2e}, t: {ti:4.1f}, "
-#                   f"norm: {norms[0]:1.2e}, norm_2: {norms[1]:1.2e}, "
-#                   f"norm_3: {norms[2]:1.2e}, psi_1_norm: {norms[4]:1.2e}, "
-#                   f"psi_2_norm: {norms[5]:1.2e}, psi_3_norm: {norms[6]:1.2e} "
-#                   f"phases: {[format_phase_change(p) for p in phase[1:]]}")
-#         # if i in zero_indices:
-#         #     z = psis[1].copy()
-#         #     pop_at_zero[(1, indexOf(i,zero_indices))] = vector_to_array_on_zero(z)
-#         #     zz = psis[2].copy()
-#         #     pop_at_zero[(2, indexOf(i,zero_indices))] = vector_to_array_on_zero(zz)
-#         #     zzz = psis[3].copy()
-#         #     pop_at_zero[(3, indexOf(i,zero_indices))] = vector_to_array_on_zero(zzz)
-#         if i % save_steps == 0:
-#             z = psis[1].copy()
-#             pop_at_zero[(1, i)] = vector_to_array_on_zero(z)
-#             zz = psis[2].copy()
-#             pop_at_zero[(2, i)] = vector_to_array_on_zero(zz)
-#             zzz = psis[3].copy()
-#             pop_at_zero[(3, i)] = vector_to_array_on_zero(zzz)
-
-#     return pop_at_zero
 
 
 @click.command()
@@ -1114,17 +874,17 @@ def setup_and_run(hamiltonian_folder, efield_folder, output_folder, key):
     if rank == 0:
         print(f"zeros: {options['zero_indices']}")
     global prototype_index
-    prototype_index = options["prototype"][1]
+    # prototype_index = options["prototype"][1]
 
-    mask_df = basis_vec_to_df_on_zero(options["masks"],
-                                      options["prototype"][1])
-    if 0 == PETSc.COMM_WORLD.getRank():
-        intensity = da.Abinitio(efield_folder).laser.intensity
-        cycles = da.Abinitio(efield_folder).laser.cycles
-        if not key:
-            key = f"p_{intensity:1.1e}_{cycles}".replace("+", "")
-        key_run = key + "_absorbers"
-        mask_df.to_hdf(join(output_folder, "perturbative.hdf"), key=key_run)
+    # mask_df = basis_vec_to_df_on_zero(options["masks"],
+    #                                   prototype_index)
+    # if 0 == PETSc.COMM_WORLD.getRank():
+    #     intensity = da.Abinitio(efield_folder).laser.intensity
+    #     cycles = da.Abinitio(efield_folder).laser.cycles
+    #     if not key:
+    #         key = f"p_{intensity:1.1e}_{cycles}".replace("+", "")
+    #     key_run = key + "_absorbers"
+    #     mask_df.to_hdf(join(output_folder, "perturbative.hdf"), key=key_run)
     pop_at_zero = run_perturbation_calculation_recurse(**options)
     if 0 == PETSc.COMM_WORLD.getRank():
         intensity = da.Abinitio(efield_folder).laser.intensity
@@ -1132,7 +892,7 @@ def setup_and_run(hamiltonian_folder, efield_folder, output_folder, key):
         if not key:
             key = f"p_{intensity:1.1e}_{cycles}".replace("+", "")
         key_run = key + "_run"
-        pop_df = pd.DataFrame(pop_at_zero, index=options["prototype"][1])
+        pop_df = pd.DataFrame(pop_at_zero, index=prototype_index)
         pop_df.to_hdf(join(output_folder, "perturbative.hdf"), key=key_run)
 
 
