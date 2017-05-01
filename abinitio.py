@@ -77,7 +77,7 @@ class Laser(object):
             try:
                 ef = get_file(self.ef_filename)
             except IOError as e:
-                print(f"Failed to read efield, got error {e}, instead making it.")
+                print("Failed to read efield, got error {e}, instead making it.".format(e=e))
                 ef = self.find_efield()
             if np.shape(self.time) != np.shape(ef):
                 # there is a problem here: just recreate the efield:
@@ -260,7 +260,7 @@ class Dipole(object):
             s1 = (term[0], term[-2])
             s2 = (term[1], term[-1])
         if s1 != s2 and term != "all":
-            print(f"doubling term: {term}")
+            print("doubling term: {term}".format(term=term))
             # we want 2*real part when the two sections don't match:
             dipole_moment = 2 * dipole_moment.real
         else:
@@ -372,7 +372,7 @@ class Abinitio(object):
                 self.susceptibilities = pd.read_hdf(
                     join(path, "abinitio_data.hdf"), "susceptibilities")
             except Exception as e:
-                print(f"savefile for {self.path} ran into error {e}, ignoring")
+                print("savefile for {self.path} ran into error {e}, ignoring".format(self=self, e=e))
                 self.data = None
                 self.susceptibilities = None
 
@@ -446,8 +446,8 @@ class Abinitio(object):
         bin_freq = int(round(bin_freq_f))
         nn = zero_pad / window_size
         print(
-            f"Zero pad ({zero_pad}) is {nn} times window_size({window_size}),"
-            f" and a bin_freq is {bin_freq_f}")
+            "Zero pad ({zero_pad}) is {nn} times window_size({window_size}),"
+            " and a bin_freq is {bin_freq_f}".format(zero_pad=zero_pad, window_size=window_size, bin_freq_f = bin_freq_f))
         # the size of the move between windowing functions
         if hop is None and dt_cycle_frac is None:
             hop = int(dt / (self.time[1] - self.time[0]))
