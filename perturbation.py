@@ -204,7 +204,25 @@ class Wavefunction:
             assert(self.mask.size == self.H.size)
 
     def __repr__(self):
-        return "{}: \n{}".format(self.name, print_vec(self.psi_whole))
+        return "{}: \n{}".format(self.name, self.print_vector())
+
+    def print_vector(self):
+        vs = self.get_vector_to_zero()
+        if rank == 0:
+            if len(vs) == 1:
+                vs = vs[0]
+            df = pd.Series(vs).T
+            df.index = self.prototype_whole
+            return df.loc[df!=0]
+        return "not on this rank"
+
+    def get_vector_to_zero(self):
+        self.psi_whole.restoreSubVector(self.is_,self.psi)
+        out = vector_to_array_on_zero(self.psi_whole)
+        if rank == 0 and len(out) == 1:
+            out = out[0]
+        self.psi = self.psi_whole.getSubVector(self.is_)
+        return out
 
     def mask(self):
         if self.mask:
@@ -563,19 +581,23 @@ class Integration_Tree:
         #     f"interval: {interval} failed, not in {self.children[0].limits} or {self.children[1].limits}, for node: {self!r}"
         # )
 
-    def breadth_first_sum(self, interval=None):
+    def breadth_first_sum(self):
         ##logging.debug(f"entering 'breadth_first_sum': with {interval}")
-        if self.children is None and interval is None:
-            ##logging.debug(f"no children, returning I.  {self!r}")
+        #if interval is None:
+        if self.children is None:
             return self.I
-        elif self.children is None and interval == self.limits:
-            return self.I
-        elif interval is None:
-            return sum(child.breadth_first_sum() for child in self.children)
-        elif interval is not None and self.children is not None:
-            return sum(child.breadth_first_sum(child.limits.intersection(interval)) for child in self.children if child.limits.intersection(interval))
         else:
-            return 0
+            return sum(child.breadth_first_sum() for child in self.children)
+        # elif interval == self.limits:
+        #     return self.I
+        # elif self.children is None and interval == self.limits:
+        #     return self.I
+        # elif interval is None:
+        #     return sum(child.breadth_first_sum() for child in self.children)
+        # elif interval is not None and self.children is not None:
+        #     return sum(child.breadth_first_sum(child.limits.intersection(interval)) for child in self.children if child.limits.intersection(interval))
+        # else:
+        #     return 0
 
     def repr_helper(self, level=0):
         rep = "<Node: {}, limits: {}, order: {}".format(self.I,self.limits,self.order)
@@ -584,7 +606,7 @@ class Integration_Tree:
         repc = ""
         if self.children:
             for i, child in enumerate(self.children):
-                repc = "\n" + '\t' * (
+                repc += "\n" + '\t' * (
                     level + 1) + "{i}: {c},".format(i=i,c = child.repr_helper(level+1))
             repc += ">"
         return rep + repc + repend
@@ -704,9 +726,9 @@ def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs):
             "\n\n\n\n\n\n\n===============================================\n\n\n\n\n\n\n"
         )
     for o, psi in zip(count(1), psis[1:]):
+        psi.psi += I_of_n[o].breadth_first_sum()
         logging.info("I_of_n[o]: {}".format(I_of_n[o]))
         logging.info("psi: {}".format(psi))
-        psi.psi += I_of_n[o].breadth_first_sum()
 
 
     return psis
@@ -818,12 +840,13 @@ def run_perturbation_calculation_recurse(D,
                                          efield,
                                          time,
                                          zero_indices,
+                                         hdf_store,
+                                         hdf_key,
                                          steps=3*3,
                                          save_steps=1,
                                          **kwargs):
     #logging.debug(f"entering 'run_perturbation_calculation_recurse'")
     from itertools import islice
-    pop_at_zero = {}
 
     #logging.debug("psis:")
     #for i, psi in enumerate(psis):
@@ -845,29 +868,37 @@ def run_perturbation_calculation_recurse(D,
         if (i % 1 == 0 or i in zero_indices) and rank == 0:
             print("step: {}, ef: {:1.2e}, t: {:4.1f},  psi_1_norm: {:1.2e}, ".format(i,efi,ti,norms[1])
                   + "psi_2_norm: {:1.2e}, psi_3_norm: {:1.2e} ".format(norms[2], norms[3]))
-        if i % save_steps == 0:
-            z = psis[1].psi_whole.copy()
-            pop_at_zero[(1, i)] = vector_to_array_on_zero(z)
-            zz = psis[2].psi_whole.copy()
-            pop_at_zero[(2, i)] = vector_to_array_on_zero(zz)
-            zzz = psis[3].psi_whole.copy()
-            pop_at_zero[(3, i)] = vector_to_array_on_zero(zzz)
-        break
-    return pop_at_zero
+        if i % save_steps == 0 or i in zero_indices:
+            pop_at_zero = {}
+            # psis[1].psi_whole.view(PETSc.Viewer().STDOUT())
+            # psis[2].psi_whole.view(PETSc.Viewer().STDOUT())
+            # psis[3].psi_whole.view(PETSc.Viewer().STDOUT())
+            z = psis[1].get_vector_to_zero()
+            zz = psis[2].get_vector_to_zero()
+            zzz = psis[3].get_vector_to_zero()
+            if rank == 0:
+                pop_at_zero[(1, i)] = z
+                pop_at_zero[(2, i)] = zz
+                pop_at_zero[(3, i)] = zzz
+                logging.info("pop_at_zero: \n" + repr(pop_at_zero))
+                pop_df = pd.DataFrame(pop_at_zero)
+                with pd.HDFStore(hdf_store) as store:
+                    logging.info("writing to hdf file:")
+                    store.append(hdf_key, pop_df)
+    return
 
 
 
 @click.command()
 @click.option("--hamiltonian_folder", type=str)
 @click.option("--efield_folder", type=str)
-@click.option(
-    "--output_folder",
-    type=str,
-    default="~/Documents/Data/local_tests/perturbative/")
+@click.option("--steps", type=int, default=3*3)
+@click.option("--save_steps", type=int, default=1)
+@click.option("--out_file", type=str, default=None)
 @click.option("--key", type=str, default=None)
-def setup_and_run(hamiltonian_folder, efield_folder, output_folder, key):
+def setup_and_run(hamiltonian_folder, efield_folder, out_file, key, **options):
     #logging.debug(f"rank: {rank} started")
-    options = get_efield(efield_folder)
+    options.update(get_efield(efield_folder))
     #logging.debug(f"rank: {rank} got efield")
     options.update(initialize_objects(hamiltonian_folder))
     #logging.debug(f"rank: {rank} initialized objects")
@@ -885,15 +916,17 @@ def setup_and_run(hamiltonian_folder, efield_folder, output_folder, key):
     #         key = f"p_{intensity:1.1e}_{cycles}".replace("+", "")
     #     key_run = key + "_absorbers"
     #     mask_df.to_hdf(join(output_folder, "perturbative.hdf"), key=key_run)
+    options["hdf_store"] = out_file
+    intensity = da.Abinitio(efield_folder).laser.intensity
+    cycles = da.Abinitio(efield_folder).laser.cycles
+    if not key:
+        key = "p_{:1.1e}_{}".format(intensity,cycles).replace("+", "")
+    options[ "hdf_key" ] = key + "_run"
+
     pop_at_zero = run_perturbation_calculation_recurse(**options)
-    if 0 == PETSc.COMM_WORLD.getRank():
-        intensity = da.Abinitio(efield_folder).laser.intensity
-        cycles = da.Abinitio(efield_folder).laser.cycles
-        if not key:
-            key = "p_{:1.1e}_{}".format(intensity,cycles).replace("+", "")
-        key_run = key + "_run"
-        pop_df = pd.DataFrame(pop_at_zero, index=prototype_index)
-        pop_df.to_hdf(join(output_folder, "perturbative.hdf"), key=key_run)
+    # if 0 == PETSc.COMM_WORLD.getRank():
+    #     pop_df = pd.DataFrame(pop_at_zero, index=prototype_index)
+    #     pop_df.to_hdf(join(output_folder, "perturbative.hdf"), key=key_run)
 
 
 if __name__ == "__main__":
