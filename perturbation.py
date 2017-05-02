@@ -1,9 +1,10 @@
-#!/usr/local/bin/python3
+#!/curc/tools/x86_64/rh6/software/python/3.5.2/gcc/5.1.0/bin/python3
+import sys
+
 
 import numpy as np
 import pandas as pd
 import data_analysis as da
-import sys
 from os.path import join
 import click
 from collections import OrderedDict
@@ -13,19 +14,18 @@ from fractions import Fraction
 import logging
 from mpi4py import MPI
 
-
-
 import petsc4py
 petsc4py.init(sys.argv)
 
 from petsc4py import PETSc
 
+
 rank = PETSc.COMM_WORLD.getRank()
 mpi_size = PETSc.COMM_WORLD.getSize()
+print("starting? {}".format(rank))
 
-if rank == 0:
-    logging.basicConfig(
-        format="[{}]:".format(rank) + '%(levelname)s:%(message)s', level=logging.INFO)
+logging.basicConfig(filename="logg_" + str(rank) + ".log",
+    format="[{}]:".format(rank) + '%(levelname)s:%(message)s', level=logging.INFO)
 
 prototype_index = None
 prototype = None
@@ -196,6 +196,9 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True)
 
     logging.info("finished getting sub vectors")
 
+#    logging.info(f"psi_0_whole: size: {psi_0_whole.getSize()}")
+#    logging.info(f"prototype: size: {prototype_index.shape}")
+#    logging.info(f"vec is: \n{ print_vec(psi_0_whole) }")
     # logging.info(f"psi_1: size: {psi_1.getSize()}")
     # logging.info(f"vec is: \n{ print_vec(psi_1, prototype_index) }")
     # logging.info(f"psi_2: size: {psi_2.getSize()}")
@@ -685,13 +688,13 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
         m = max(ma, mb)
         error = Ia.copy()
         error -= Ib
-        #logging.debug(f"error: ")
+        logging.debug("max:{}".format(m))
         #logging.debug(print_vec(error))
         error.abs()
         i_abs, m_abs = error.max()
         avg_abs = error.sum()
         norm_abs = error.norm()
-        #logging.debug(f"abs error: ")
+        logging.debug("i_abs:{}, m_abs{}, avs_abs:{}, norm_abs:{}".format(i_abs,m_abs,avg_abs,norm_abs))
         #logging.debug(print_vec(error))
         error /= abs(Ia)
         array = error.getArray()
@@ -703,13 +706,14 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
         op=MPI.SUM)
 
         error.setArray(array)
-        #logging.debug(f"rel_error: ")
+        logging.debug("nonzero: {}".format(nonzero))
         #logging.debug(print_vec(error))
         i_rel, m_rel = error.max()
         avg_rel = error.sum() / nonzero
         avg_abs = np.real(avg_abs / nonzero)
 
         norm_rel = error.norm()
+        logging.debug("i_rel:{}, m_rel{}, avs_rel:{}, norm_rel:{}".format(i_rel,m_rel,avg_rel,norm_rel))
         if rank == 0:
             # if prototype_index:
             #     loc_rel = prototype_index.get_level_values("n")[
@@ -722,7 +726,7 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
             #else:
             logging.info(
                 "max relative error for {} is {}, average is {} and norm is {} goal is {}".format(interval,m_rel,avg_rel,norm_rel,err_goal_rel))
-            logging.info("max absolute error for {} is {} compared to max {} is {}, average is {} and norm is {} goal is {}".format(interval, m_abs, m, m_abs/m, avg_abs, norm_abs, err_goal_abs))
+            logging.info("max absolute error for {} is {} compared to max {} is {}, average is {} and norm is {} goal is {}".format(interval, m_abs, m, m_abs, avg_abs, norm_abs, err_goal_abs))
         # if mask_ is not None:
         #     error.pointwiseMult(error, mask_)
         #     i, m_rel = error.max()
