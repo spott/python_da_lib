@@ -12,12 +12,12 @@ Data analysis library for reading data from EBSS.  Includes "perturbation.py" wh
  
 ## Usage:
 
-  `--hamiltonian_folder` - the folder that the hamiltonian (dipole matrix and prototype -- which is the map from (n,l,j,m,e) to index number in the basis)
-  `--efield_folder` The folder that has the ab-initio run that includes the efield values.  This *should* be removed and done in file eventually.
-  `--steps` size of each adaptive "big" step. Too small, and unnecessary work is done (the tree can only be so shallow, too big and unnecessary work is done.  Should be some 3^n... though not strictly necessary 
-  `--save_steps` when to save (in number of "dt" steps).  Currently at 1, and I recommend it stays that way.  Will only save when the adaptive step is done anyways.
-  `--out_file` the hdf file to save to
-  `--key` the key in the hdf file.
-  `--relative_error` the maximum error that average(|error|) / max(|error|) can be.  set to 1e-3 by default.
-  `--absolute_error` the maximum error that average(|error|) can be.  Currently error checking is either/or, to prevent spending too much time on early results
+  * `--hamiltonian_folder` - the folder that the hamiltonian (dipole matrix and prototype -- which is the map from (n,l,j,m,e) to index number in the basis)
+  * `--efield_folder` The folder that has the ab-initio run that includes the efield values.  This *should* be removed and done in file eventually.
+  * `--steps` size of each adaptive "big" step. Too small, and unnecessary work is done (the tree can only be so shallow, too big and unnecessary work is done.  Should be some 3^n... though not strictly necessary 
+  * `--save_steps` when to save (in number of "dt" steps).  Currently at 1, and I recommend it stays that way.  Will only save when the adaptive step is done anyways.
+  * `--out_file` the hdf file to save to
+  * `--key` the key in the hdf file.
+  * `--relative_error` the maximum error that average(|error|) / max(|error|) can be.  set to 1e-3 by default.
+  * `--absolute_error` the maximum error that average(|error|) can be.  Currently error checking is either/or, to prevent spending too much time on early results
   
