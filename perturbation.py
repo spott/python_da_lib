@@ -877,14 +877,15 @@ def run_perturbation_calculation_recurse(D,
             zz = psis[2].get_vector_to_zero()
             zzz = psis[3].get_vector_to_zero()
             if rank == 0:
-                pop_at_zero[(1, i)] = z
-                pop_at_zero[(2, i)] = zz
-                pop_at_zero[(3, i)] = zzz
+                pop_at_zero[(1, i, ti, efi)] = z
+                pop_at_zero[(2, i, ti, efi)] = zz
+                pop_at_zero[(3, i, ti, efi)] = zzz
                 logging.info("pop_at_zero: \n" + repr(pop_at_zero))
                 pop_df = pd.DataFrame(pop_at_zero)
+                pop_df.columns.set_names(["order","step", "time", "efield"], inplace=True)
                 with pd.HDFStore(hdf_store) as store:
                     logging.info("writing to hdf file:")
-                    store.append(hdf_key, pop_df)
+                    store.append(hdf_key, pop_df.stack(["step","time","efield"]).reset_index(["step","time","efield"]))
     return
 
 
