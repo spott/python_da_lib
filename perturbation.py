@@ -842,6 +842,8 @@ def run_perturbation_calculation_recurse(D,
                                          zero_indices,
                                          hdf_store,
                                          hdf_key,
+                                         relative_error=1e-3,
+                                         absolute_error=1e-16,
                                          steps=3*3,
                                          save_steps=1,
                                          **kwargs):
@@ -862,7 +864,7 @@ def run_perturbation_calculation_recurse(D,
             enumerate(zip(efield, time)), steps, None, steps):
 
         psis = recursive_integrate(integrands, psis,
-                                   Interval(i - steps, i), 1e-3, 1e-16)
+                                   Interval(i - steps, i), relative_error, absolute_error)
 
         norms = [p.psi_whole.norm() for p in psis]
         if (i % 1 == 0 or i in zero_indices) and rank == 0:
@@ -897,6 +899,8 @@ def run_perturbation_calculation_recurse(D,
 @click.option("--save_steps", type=int, default=1)
 @click.option("--out_file", type=str, default=None)
 @click.option("--key", type=str, default=None)
+@click.option("--relative_error", type=str, default=1e-3)
+@click.option("--absolute_error", type=str, default=1e-16)
 def setup_and_run(hamiltonian_folder, efield_folder, out_file, key, **options):
     #logging.debug(f"rank: {rank} started")
     options.update(get_efield(efield_folder))
