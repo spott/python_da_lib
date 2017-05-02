@@ -24,8 +24,6 @@ rank = PETSc.COMM_WORLD.getRank()
 mpi_size = PETSc.COMM_WORLD.getSize()
 print("starting? {}".format(rank))
 
-logging.basicConfig(filename="logg_" + str(rank) + ".log",
-    format="[{}]:".format(rank) + '%(levelname)s:%(message)s', level=logging.INFO)
 
 prototype_index = None
 prototype = None
@@ -963,6 +961,9 @@ def run_perturbation_calculation_recurse(D,
 @click.option("--dense/--not_dense", default=False)
 @click.argument("other_args", nargs=-1, type=click.UNPROCESSED)
 def setup_and_run(hamiltonian_folder, efield_folder, out_file, key, dense, other_args, **options):
+
+    logging.basicConfig(filename="log_" + str(rank) + key  + ".log",
+        format="[{}]:".format(rank) + '%(levelname)s:%(message)s', level=logging.INFO)
     #logging.debug(f"rank: {rank} started")
     options.update(get_efield(efield_folder))
     #logging.debug(f"rank: {rank} got efield")
