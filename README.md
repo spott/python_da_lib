@@ -4,11 +4,16 @@ Data analysis library for reading data from EBSS.  Includes "perturbation.py" wh
 
 ## Requirements:
  * A fairly modern python 3 version.  Most of the lib requires 3.6 (f strings), however perturbation.py should run on 3.5 or 3.4.
- * petsc4py with petsc and complex value support.
- * mpi4py
- * core
- * numpy
- * pandas
+ * Python modules:
+  * petsc4py with petsc and complex value support.
+  * mpi4py
+  * core
+  * numpy
+  * pandas
+  * tables
+ * hdf5
+ * mpi (for mpi4py)
+ * petsc (for petsc4py)
  
 ## Usage:
 
