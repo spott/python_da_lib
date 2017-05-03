@@ -39,7 +39,6 @@ def find_zeros(t, x):
         list(np.intersect1d(positive, negative + 1)))
     return (zeros, t[zeros])
 
-
 @profile
 def perturb_order_petsc(psi, dipole, Hl, Hr, d_dot_an, ef, time):
     # exp(t) * dipole * E(t) * psi * exp1(t)

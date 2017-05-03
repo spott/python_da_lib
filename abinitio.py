@@ -447,7 +447,7 @@ class Abinitio(object):
         nn = zero_pad / window_size
         print(
             "Zero pad ({zero_pad}) is {nn} times window_size({window_size}),"
-            " and a bin_freq is {bin_freq_f}".format(zero_pad=zero_pad, window_size=window_size, bin_freq_f = bin_freq_f))
+            " and a bin_freq is {bin_freq_f}".format(zero_pad=zero_pad,nn=nn, window_size=window_size, bin_freq_f = bin_freq_f))
         # the size of the move between windowing functions
         if hop is None and dt_cycle_frac is None:
             hop = int(dt / (self.time[1] - self.time[0]))
