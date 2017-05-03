@@ -21,6 +21,7 @@ petsc4py.init(sys.argv)
 from petsc4py import PETSc
 
 rank = PETSc.COMM_WORLD.getRank()
+mpi_size = PETSc.COMM_WORLD.getSize()
 
 if rank == 0:
     logging.basicConfig(
@@ -38,6 +39,8 @@ def find_zeros(t, x):
         list(np.intersect1d(positive, negative + 1)))
     return (zeros, t[zeros])
 
+
+@profile
 def perturb_order_petsc(psi, dipole, Hl, Hr, d_dot_an, ef, time):
     # exp(t) * dipole * E(t) * psi * exp1(t)
     exp1 = Hr.copy()
@@ -78,7 +81,7 @@ def vector_to_array_on_zero(vs):
     return results
 
 
-def initialize_objects(hamiltonian_folder, absorber_size=[200, 200]):
+def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True):
     global prototype
     global prototype_index
     prototype = da.import_prototype_from_file(
@@ -88,23 +91,52 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200]):
     v = PETSc.Viewer().createBinary(
         join(hamiltonian_folder, "dipole_matrix.dat.gz"), 'r')
     D = PETSc.Mat().load(v)
+    logging.info("D size: "+str( D.getSizes() ) + " info: " + str(D.getInfo()))
     v.destroy()
 
     l_0_list, l_1_list, l_2_list = [],[],[]
-    for i, (n,l,m,j,e) in enumerate(prototype):
-        if l == 0:
-            l_0_list += [i]
-        if l == 1:
-            l_1_list += [i]
-        if l == 2:
-            l_2_list += [i]
-    is_0 = PETSc.IS().createGeneral(l_0_list)
-    is_1 = PETSc.IS().createGeneral(l_1_list)
-    is_2 = PETSc.IS().createGeneral(l_2_list + l_0_list)
 
-    D_01 = D.createSubMatrix(is_1, is_0)
-    D_12 = D.createSubMatrix(is_2, is_1)
-    D_21 = D.createSubMatrix(is_1, is_2)
+    (start,end) = D.getOwnershipRange()
+
+    for i, (n,l,m,j,e) in enumerate(prototype):
+        if l == 0 and n % mpi_size == rank:
+            l_0_list += [i]
+        if l == 1 and n % mpi_size == rank:
+            l_1_list += [i]
+        if l == 2 and  n % mpi_size == rank:
+            l_2_list += [i]
+
+    is_0 = PETSc.IS().createGeneral(l_0_list)
+    logging.info("IS_0: " + str( is_0.getSizes() ))
+    is_1 = PETSc.IS().createGeneral(l_1_list)
+    logging.info("IS_1: " + str( is_1.getSizes() ))
+    is_2 = PETSc.IS().createGeneral(l_2_list + l_0_list)
+    logging.info("IS_2: " + str( is_2.getSizes() ))
+
+    D_01_ = D.createSubMatrix(is_1, is_0)
+    D_01 = D_01_
+    if dense:
+        (M, N) = D_01_.getSize()
+        D_01 = PETSc.Mat().createDense((M,N))
+        D_01.setUp()
+        D_01_.convert("dense", D_01)
+    logging.info("D_01: " + str( D_01.getSizes() ) + " info: " + str(D_01.getInfo()))
+    D_12_ = D.createSubMatrix(is_2, is_1)
+    D_12 = D_12_
+    if dense:
+        (M, N) = D_12_.getSize()
+        D_12 = PETSc.Mat().createDense((M,N))
+        D_12.setUp()
+        D_12_.convert("dense",D_12)
+    logging.info("D_12 size: " + str(D_12.getSizes()) + " info: " + str(D_12.getInfo()))
+    D_21_ = D.createSubMatrix(is_1, is_2)
+    D_21 = D_21_
+    if dense:
+        (M, N) = D_21_.getSize()
+        D_21 = PETSc.Mat().createDense((M,N))
+        D_21.setUp()
+        D_21_.convert("dense",D_21)
+    logging.info("D_21 size: " + str( D_21.getSizes() ) + " info: " + str(D_21.getInfo()))
 
     v = PETSc.Viewer().createBinary(
         join(hamiltonian_folder, "energy_eigenvalues_vector.dat"), 'r')
@@ -114,6 +146,8 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200]):
     H_1 = H.getSubVector(is_1)
     H_2 = H.getSubVector(is_2)
     H_3 = H.getSubVector(is_1)
+
+    logging.info("finished creating sub H vectors")
 
     psi_0_whole = D.createVecRight()
     psi_0_whole.setValue(0, 1)
@@ -133,36 +167,36 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200]):
     l_3_mask_ = D.createVecLeft()
     l_3_mask_.set(1)
 
+    logging.info("finished creating psis")
 
     n_max = max([x[0] for x in prototype])
-
+    startn, endn = n_1_mask_.getOwnershipRange()
+    startl, endl = l_3_mask_.getOwnershipRange()
+    logging.info("ownership ranges: {}, {}, {}, {}".format(startn, endn, startl, endl))
     for i, (n, l, m, j, e) in enumerate(prototype):
-        if l == 0:
+        if l == 0 and startn <= i < endn:
             if n_max - n < absorber_size[0]:
                 val = np.sin(
                     (n_max - n) * np.pi / (2 * absorber_size[0]))**(1)
                 n_1_mask_.setValue(i, val)
-        if l == 2:
+        if l == 2 and startn <= i < endn:
             if n_max - n < absorber_size[0]:
                 val = np.sin(
                     (n_max - n) * np.pi / (2 * absorber_size[0]))**(1)
                 n_1_mask_.setValue(i, val)
-        if l == 1:
+        if l == 1 and startl <= i < endl:
             if n_max - n < absorber_size[1]:
                 val = np.sin(
                     (n_max - n) * np.pi / (2 * absorber_size[1]))**(1)
                 l_3_mask_.setValue(i, val)
-        if l == 3:
+        if l == 3 and startl <= i < endl:
             l_3_mask_.setValue(i, 0)
+    logging.info("finished finding mask values, assembling")
     n_1_mask_.assemble()
     l_3_mask_.assemble()
 
-    n_1_mask = n_1_mask_.getSubVector(is_2)
-    l_3_mask = l_3_mask_.getSubVector(is_1)
+    logging.info("finished getting sub vectors")
 
-    logging.info(f"psi_0_whole: size: {psi_0_whole.getSize()}")
-    logging.info(f"prototype: size: {prototype_index.shape}")
-    logging.info(f"vec is: \n{ print_vec(psi_0_whole) }")
     # logging.info(f"psi_1: size: {psi_1.getSize()}")
     # logging.info(f"vec is: \n{ print_vec(psi_1, prototype_index) }")
     # logging.info(f"psi_2: size: {psi_2.getSize()}")
@@ -170,11 +204,13 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200]):
     # logging.info(f"psi_3: size: {psi_3.getSize()}")
     # logging.info(f"vec is: \n{ print_vec(psi_3, prototype_index) }")
 
-    psi_0 = Wavefunction(psi_0_whole, prototype_index, H_0, "psi_0", l_0_list)
-    psi_1 = Wavefunction(psi_1_whole, prototype_index, H_1, "psi_1", l_1_list)
-    psi_2 = Wavefunction(psi_2_whole, prototype_index, H_2, "psi_2", l_0_list + l_2_list, n_1_mask)
-    psi_3 = Wavefunction(psi_3_whole, prototype_index, H_3, "psi_3", l_1_list, l_3_mask)
+    psi_0 = Wavefunction(psi_0_whole, prototype_index, H, "psi_0", l_0_list)
+    psi_1 = Wavefunction(psi_1_whole, prototype_index, H, "psi_1", l_1_list)
+    psi_2 = Wavefunction(psi_2_whole, prototype_index, H, "psi_2", l_0_list + l_2_list, n_1_mask_)
+    psi_3 = Wavefunction(psi_3_whole, prototype_index, H, "psi_3", l_1_list, l_3_mask_)
 
+    logging.info(f"prototype: size: {prototype_index.shape}")
+    logging.info(f"vec is: \n{ psi_0.print_vector() }")
 
     ret_dict = {
         "D": [D_01, D_12, D_21],
@@ -187,19 +223,32 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200]):
 class Wavefunction:
 
     def __init__(self, psi, prototype, H, name, is_list=None, mask=None):
+        #logging.info("creating wavefunction for: " + name)
         self.prototype_whole = prototype
         self.prototype = None
         self.psi_whole = psi.copy()
-        self.H = H
+        self.H_whole = H.copy()
         self.psi = None
+        self.H = None
+        self.mask = None
         self.name = name
-        if is_list:
+        if is_list is not None:
+            #logging.info("creating subvectors for: " + name)
             self.is_list = is_list
+            #logging.info("info list size:" + str(len(self.is_list)) + " max, min: " + str(max(self.is_list)) + ", " + str(min(self.is_list)))
             self.is_ = PETSc.IS().createGeneral(is_list)
+            self.H = self.H_whole.getSubVector(self.is_)
             self.psi = self.psi_whole.getSubVector(self.is_)
             self.prototype = self.prototype_whole.take(is_list)
-        self.mask = mask
-        if mask:
+            #logging.info("done creating subvectors for: " + name)
+            if mask is not None:
+                self.mask_whole = mask.copy()
+                self.mask = self.mask_whole.getSubVector(self.is_)
+                assert(self.mask.size == self.psi.size)
+                assert(self.mask.size == self.H.size)
+            else:
+                self.mask_whole = None
+        if mask is not None:
             assert(self.mask.size == self.psi.size)
             assert(self.mask.size == self.H.size)
 
@@ -229,7 +278,7 @@ class Wavefunction:
             self.psi.pointwiseMult(self.psi, self.mask)
 
     def copy(self):
-        return Wavefunction(self.psi_whole, self.prototype_whole, self.H, self.name, self.is_list, self.mask)
+        return Wavefunction(self.psi_whole, self.prototype_whole, self.H_whole, self.name, self.is_list, self.mask_whole)
 
 
 
@@ -846,6 +895,7 @@ def run_perturbation_calculation_recurse(D,
                                          absolute_error=1e-16,
                                          steps=3*3,
                                          save_steps=1,
+                                         max_step=None,
                                          **kwargs):
     #logging.debug(f"entering 'run_perturbation_calculation_recurse'")
     from itertools import islice
@@ -888,31 +938,39 @@ def run_perturbation_calculation_recurse(D,
                 with pd.HDFStore(hdf_store) as store:
                     logging.info("writing to hdf file:")
                     store.append(hdf_key, pop_df.stack(["step","time","efield"]).reset_index(["step","time","efield"]))
+
+        if max_step is not None and i >= max_step:
+            break
     return
 
 
 
-@click.command()
+@click.command(context_settings=dict(
+    ignore_unknown_options=True,
+))
 @click.option("--hamiltonian_folder", type=str)
 @click.option("--efield_folder", type=str)
 @click.option("--steps", type=int, default=3*3)
 @click.option("--save_steps", type=int, default=1)
 @click.option("--out_file", type=str, default=None)
 @click.option("--key", type=str, default=None)
-@click.option("--relative_error", type=str, default=1e-3)
-@click.option("--absolute_error", type=str, default=1e-16)
-def setup_and_run(hamiltonian_folder, efield_folder, out_file, key, **options):
+@click.option("--relative_error", type=float, default=1e-3)
+@click.option("--absolute_error", type=float, default=1e-16)
+@click.option("--max_step", type=int, default=None)
+@click.option("--dense/--not_dense", default=False)
+@click.argument("other_args", nargs=-1, type=click.UNPROCESSED)
+def setup_and_run(hamiltonian_folder, efield_folder, out_file, key, dense, other_args, **options):
     #logging.debug(f"rank: {rank} started")
     options.update(get_efield(efield_folder))
     #logging.debug(f"rank: {rank} got efield")
-    options.update(initialize_objects(hamiltonian_folder))
+    options.update(initialize_objects(hamiltonian_folder, dense=dense))
     #logging.debug(f"rank: {rank} initialized objects")
     if rank == 0:
         print("zeros: {}".format(options['zero_indices']))
     global prototype_index
     # prototype_index = options["prototype"][1]
 
-    # mask_df = basis_vec_to_df_on_zero(options["masks"],
+    # mask_df = basis_vec_to_df_on_zero(options["masks"] ,
     #                                   prototype_index)
     # if 0 == PETSc.COMM_WORLD.getRank():
     #     intensity = da.Abinitio(efield_folder).laser.intensity
