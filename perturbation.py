@@ -14,6 +14,23 @@ from fractions import Fraction
 import logging
 from mpi4py import MPI
 
+import time
+
+class Timer(object):
+    def __init__(self, verbose=False):
+        self.verbose = verbose
+
+    def __enter__(self):
+        self.start = time.time()
+        return self
+
+    def __exit__(self, *args):
+        self.end = time.time()
+        self.secs = self.end - self.start
+        self.msecs = self.secs * 1000  # millisecs
+        if self.verbose:
+            logging.info('elapsed time: %f ms' % self.msecs)
+
 import petsc4py
 petsc4py.init(sys.argv)
 
@@ -37,7 +54,6 @@ def find_zeros(t, x):
         list(np.intersect1d(positive, negative + 1)))
     return (zeros, t[zeros])
 
-@profile
 def perturb_order_petsc(psi, dipole, Hl, Hr, d_dot_an, ef, time):
     # exp(t) * dipole * E(t) * psi * exp1(t)
     exp1 = Hr.copy()
@@ -78,7 +94,7 @@ def vector_to_array_on_zero(vs):
     return results
 
 
-def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True):
+def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True, mask_absorber_power=2):
     global prototype
     global prototype_index
     prototype = da.import_prototype_from_file(
@@ -174,17 +190,17 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True)
         if l == 0 and startn <= i < endn:
             if n_max - n < absorber_size[0]:
                 val = np.sin(
-                    (n_max - n) * np.pi / (2 * absorber_size[0]))**(1)
+                    (n_max - n) * np.pi / (2 * absorber_size[0]))**(mask_absorber_power)
                 n_1_mask_.setValue(i, val)
         if l == 2 and startn <= i < endn:
             if n_max - n < absorber_size[0]:
                 val = np.sin(
-                    (n_max - n) * np.pi / (2 * absorber_size[0]))**(1)
+                    (n_max - n) * np.pi / (2 * absorber_size[0]))**(mask_absorber_power)
                 n_1_mask_.setValue(i, val)
         if l == 1 and startl <= i < endl:
             if n_max - n < absorber_size[1]:
                 val = np.sin(
-                    (n_max - n) * np.pi / (2 * absorber_size[1]))**(1)
+                    (n_max - n) * np.pi / (2 * absorber_size[1]))**(mask_absorber_power)
                 l_3_mask_.setValue(i, val)
         if l == 3 and startl <= i < endl:
             l_3_mask_.setValue(i, 0)
@@ -209,8 +225,8 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True)
     psi_2 = Wavefunction(psi_2_whole, prototype_index, H, "psi_2", l_0_list + l_2_list, n_1_mask_)
     psi_3 = Wavefunction(psi_3_whole, prototype_index, H, "psi_3", l_1_list, l_3_mask_)
 
-    logging.info(f"prototype: size: {prototype_index.shape}")
-    logging.info(f"vec is: \n{ psi_0.print_vector() }")
+    #logging.info(f"prototype: size: {prototype_index.shape}")
+    #logging.info(f"vec is: \n{ psi_0.print_vector() }")
 
     ret_dict = {
         "D": [D_01, D_12, D_21],
@@ -401,6 +417,7 @@ class Integration_Tree:
         self.integrand = integrand
         self.psi = psi.copy()
         self.my_depth = None
+        self.rel_error, self.abs_error, self.norm_error = (0,0,0)
 
     def generate_children(self):
         if self.children:
@@ -535,7 +552,7 @@ class Integration_Tree:
         #logging.debug(f"entering 'is_converged' with {I2} for {self}")
         if self.I is None:
             return False
-        self.converged = self.convergence_criteria(I2, self.I, self.limits, self.psi.prototype)
+        self.converged, self.rel_error, self.abs_error, self.norm_error = self.convergence_criteria(I2, self.I, self.limits, self.psi.prototype)
         logging.info(str(self.order) + " " * self.depth(
         ) + "converged? {}, {}, order: {}".format(repr(self.converged), self.limits,self.order)
                      )
@@ -648,8 +665,18 @@ class Integration_Tree:
         # else:
         #     return 0
 
+    def breadth_first_error_sum(self):
+        ##logging.debug(f"entering 'breadth_first_sum': with {interval}")
+        #if interval is None:
+        if self.children is None:
+            return (self.rel_error, self.abs_error, self.norm_error)
+        else:
+            rel_ = sum(child.breadth_first_error_sum()[1] for child in self.children)
+            abs_ = sum(child.breadth_first_error_sum()[0] for child in self.children)
+            return (abs_, rel_)
+
     def repr_helper(self, level=0):
-        rep = "<Node: {}, limits: {}, order: {}".format(self.I,self.limits,self.order)
+        rep = "<Node: error: {}, vec: {}, limits: {}, order: {}".format(self.breadth_first_error_sum(), self.I,self.limits,self.order)
         repend = "\t" * level if self.children else ""
         repend += ">" if not self.children else ""
         repc = ""
@@ -709,45 +736,46 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
         i_rel, m_rel = error.max()
         avg_rel = error.sum() / nonzero
         avg_abs = np.real(avg_abs / nonzero)
-
         norm_rel = error.norm()
         logging.debug("i_rel:{}, m_rel{}, avs_rel:{}, norm_rel:{}".format(i_rel,m_rel,avg_rel,norm_rel))
         if rank == 0:
-            # if prototype_index:
-            #     loc_rel = prototype_index.get_level_values("n")[
-            #         i_rel], prototype_index.get_level_values("l")[i_rel]
-            #     loc_abs = prototype_index.get_level_values("n")[
-            #         i_abs], prototype_index.get_level_values("l")[i_abs]
-            #     logging.info(
-            #         f"max relative error for {interval} is {m_rel} at {loc_rel}, average is {avg_rel} and norm is {norm_rel} goal is {err_goal_rel}")
-            #     logging.info(f"max absolute error for {interval} is {m_abs} compared to max {m} is {m_abs/m} at {loc_abs}, average is {avg_abs} and norm is {norm_abs} goal is {err_goal_abs}")
-            #else:
-            logging.info(
-                "max relative error for {} is {}, average is {} and norm is {} goal is {}".format(interval,m_rel,avg_rel,norm_rel,err_goal_rel))
-            logging.info("max absolute error for {} is {} compared to max {} is {}, average is {} and norm is {} goal is {}".format(interval, m_abs, m, m_abs, avg_abs, norm_abs, err_goal_abs))
-        # if mask_ is not None:
-        #     error.pointwiseMult(error, mask_)
-        #     i, m_rel = error.max()
-        #     avg_rel = error.sum() / error.size
-        #     norm_rel = error.norm()
-        #     if rank == 0:
-        #         if prototy
-        #         loc = prototype_index.get_level_values("n")[
-        #             i], prototype_index.get_level_values("l")[i]
-        #         logging.info(
-        #             f"after mask, max error for {interval} is {m_rel} at {loc}, average error is: {avg_rel} and norm is {norm_rel}"
-        #             f"  err_goal is {err_goal_rel}")
+             if prototype_index:
+                  loc_rel = prototype_index.get_level_values("n")[
+                      i_rel], prototype_index.get_level_values("l")[i_rel]
+                  loc_abs = prototype_index.get_level_values("n")[
+                      i_abs], prototype_index.get_level_values("l")[i_abs]
+                  logging.info( "max relative error for {interval} is {m_rel} at {loc_rel}, average is {avg_rel} and norm is {norm_rel} goal is {err_goal_rel}".format(interval = interval, m_rel=m_rel,loc_rel=loc_rel,avg_rel=avg_rel, norm_rel=norm_rel,err_goal_rel=err_goal_rel))
+                  logging.info("max absolute error for {interval} is {m_abs} compared to max {m} is {mabs_m} at {loc_abs}, average is {avg_abs} and norm is {norm_abs} goal is {err_goal_abs}".format(interval=interval,m_abs=m_abs,m=m,mabs_m=m_abs/m, loc_abs=loc_abs,avg_abs=avg_abs,norm_abs=norm_abs,err_goal_abs=err_goal_abs))
+             else:
+                  logging.info(
+                     "max relative error for {} is {}, average is {} and norm is {} goal is {}".format(interval,m_rel,avg_rel,norm_rel,err_goal_rel))
+                  logging.info("max absolute error for {} is {} compared to max {} is {}, average is {} and norm is {} goal is {}".format(interval, m_abs, m, m_abs/m, avg_abs, norm_abs, err_goal_abs))
+        if mask_ is not None:
+            error.pointwiseMult(error, mask_)
+            i, m_rel = error.max()
+            avg_rel = error.sum() / error.size
+            norm_rel = error.norm()
+            if rank == 0:
+                if prototype_index:
+                    loc_ = prototype_index.get_level_values("n")[
+                      i], prototype_index.get_level_values("l")[i]
+                    logging.info(
+                      "after mask, max error for {interval} is {m_rel} at {loc_}, average error is: {avg_rel} and norm is {norm_rel}".format(interval=interval, m_rel=m_rel, loc_=loc_, avg_rel=avg_rel, norm_rel=norm_rel) + 
+                      "  err_goal is {err_goal_rel}".format(err_goal_rel=err_goal_rel))
         if math.isnan(m_rel):
             raise Exception("nan!")
-        if avg_abs / m < err_goal_rel or avg_abs < err_goal_abs:
-            return True
+        
+        if (err_goal_rel is None or avg_abs / m < err_goal_rel
+                ) and (err_goal_abs is None or avg_abs < err_goal_abs 
+                        ) and (err_goal_norm is None or norm_rel < err_goal_norm):
+            return True, avg_abs, avg_rel, norm_rel
         else:
             return False
 
     return convergence_criteria
 
 
-def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs):
+def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs, err_goal_norm):
 
     I_of_n = OrderedDict()
 
@@ -757,11 +785,11 @@ def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs):
 
     for o, psi, f in zip(count(1), psis[1:], fs):
         if o not in I_of_n:
-            # if f.mask is not None:
-            #     convergence_func = convergence_criteria_gen(
-            #         err_goal_rel, err_goal_abs, None, o)
-            # else:
-            convergence_func = convergence_criteria_gen(err_goal_rel, err_goal_abs, None, o)
+            if psi.mask is not None:
+                convergence_func = convergence_criteria_gen(
+                    err_goal_rel, err_goal_abs, mask, o)
+            else:
+                convergence_func = convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, None, o)
             I_of_n[o] = Integration_Tree(
                 limits=limits,
                 convergence_criteria=convergence_func,
@@ -894,6 +922,7 @@ def run_perturbation_calculation_recurse(D,
                                          hdf_key,
                                          relative_error=1e-3,
                                          absolute_error=1e-16,
+                                         norm_error=1,
                                          steps=3*3,
                                          save_steps=1,
                                          max_step=None,
@@ -914,8 +943,10 @@ def run_perturbation_calculation_recurse(D,
     for i, (efi, ti) in islice(
             enumerate(zip(efield, time)), steps, None, steps):
 
-        psis = recursive_integrate(integrands, psis,
-                                   Interval(i - steps, i), relative_error, absolute_error)
+        with Timer(verbose=True) as timeit:
+            psis = recursive_integrate(integrands, psis,
+                                       Interval(i - steps, i), relative_error, absolute_error, norm_error)
+        
 
         norms = [p.psi_whole.norm() for p in psis]
         if (i % 1 == 0 or i in zero_indices) and rank == 0:
@@ -955,8 +986,10 @@ def run_perturbation_calculation_recurse(D,
 @click.option("--save_steps", type=int, default=1)
 @click.option("--out_file", type=str, default=None)
 @click.option("--key", type=str, default=None)
-@click.option("--relative_error", type=float, default=1e-3)
-@click.option("--absolute_error", type=float, default=1e-16)
+@click.option("--norm_error", type=float, default=None)
+@click.option("--relative_error", type=float, default=None)
+@click.option("--absolute_error", type=float, default=None)
+@click.option("--mask_absorber_power", type=float, default=2)
 @click.option("--max_step", type=int, default=None)
 @click.option("--dense/--not_dense", default=False)
 @click.argument("other_args", nargs=-1, type=click.UNPROCESSED)
@@ -967,7 +1000,7 @@ def setup_and_run(hamiltonian_folder, efield_folder, out_file, key, dense, other
     #logging.debug(f"rank: {rank} started")
     options.update(get_efield(efield_folder))
     #logging.debug(f"rank: {rank} got efield")
-    options.update(initialize_objects(hamiltonian_folder, dense=dense))
+    options.update(initialize_objects(hamiltonian_folder, dense=dense, mask_absorber_power=mask_absorber_power))
     #logging.debug(f"rank: {rank} initialized objects")
     if rank == 0:
         print("zeros: {}".format(options['zero_indices']))
