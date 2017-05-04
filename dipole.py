@@ -1,4 +1,4 @@
-#!/usr/local/bin/python3
+#!/curc/tools/x86_64/rh6/software/python/3.5.2/gcc/5.1.0/bin/python3
 
 import numpy as np
 import pandas as pd
@@ -21,10 +21,6 @@ from petsc4py import PETSc
 rank = PETSc.COMM_WORLD.getRank()
 mpi_size = PETSc.COMM_WORLD.getSize()
 
-if rank == 0:
-    logging.basicConfig(
-        format="[{}]:".format(rank) + '%(levelname)s:%(message)s',
-        level=logging.INFO)
 
 
 def dipole_moment(psil, dipole, psir):
@@ -177,6 +173,10 @@ def find_dipole_moments(D, energy_splits, dataframe, out_store, out_store_key):
 @click.option("--splits_folder", type=str, default=None)
 @click.argument("other_args", nargs=-1, type=click.UNPROCESSED)
 def setup_and_run(hamiltonian_folder, out_file, out_key, in_file, in_key, splits_folder, other_args):
+    logging.basicConfig(
+            filename = "log_dipole_" + str(rank) + in_key + ".log",
+        format="[{}]:".format(rank) + '%(levelname)s:%(message)s',
+        level=logging.INFO)
     D = initialize_objects(hamiltonian_folder)
     dataframe = hdf_store_to_dataframe(in_file, in_key)
     splits = [(-1000,0),(0,1000)]

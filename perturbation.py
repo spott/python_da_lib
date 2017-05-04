@@ -240,6 +240,7 @@ class Wavefunction:
 
     def __init__(self, psi, prototype, H, name, is_list=None, mask=None):
         #logging.info("creating wavefunction for: " + name)
+        self.error = [0,0,0]
         self.prototype_whole = prototype
         self.prototype = None
         self.psi_whole = psi.copy()
@@ -248,6 +249,8 @@ class Wavefunction:
         self.H = None
         self.mask = None
         self.name = name
+        self.error_vec_whole = self.psi_whole.duplicate()
+        self.error_vec_whole.set(0)
         if is_list is not None:
             #logging.info("creating subvectors for: " + name)
             self.is_list = is_list
@@ -257,6 +260,7 @@ class Wavefunction:
             self.psi = self.psi_whole.getSubVector(self.is_)
             self.prototype = self.prototype_whole.take(is_list)
             #logging.info("done creating subvectors for: " + name)
+            self.error_vec = self.error_vec_whole.getSubVector(self.is_)
             if mask is not None:
                 self.mask_whole = mask.copy()
                 self.mask = self.mask_whole.getSubVector(self.is_)
@@ -274,12 +278,29 @@ class Wavefunction:
     def print_vector(self):
         vs = self.get_vector_to_zero()
         if rank == 0:
-            if len(vs) == 1:
-                vs = vs[0]
             df = pd.Series(vs).T
             df.index = self.prototype_whole
             return df.loc[df!=0]
         return "not on this rank"
+
+    def print_error_vec(self):
+        e = self.get_error_vector_to_zero()
+        wf = self.get_vector_to_zero()
+        if rank == 0:
+            #print("print_error_vec vs size: {}".format(len(vs)))
+            df = pd.DataFrame({"error":e, "wavefunction":wf},index=self.prototype_whole )
+            df["rel_error"] = df["error"] / np.abs(df["wavefunction"])
+            df.sort_values("rel_error",ascending=False, inplace=True)
+            return df.loc[df["wavefunction"]!= 0]
+        return "not on this rank"
+
+    def get_error_vector_to_zero(self):
+        self.error_vec_whole.restoreSubVector(self.is_,self.error_vec)
+        out = vector_to_array_on_zero(self.error_vec_whole)
+        if rank == 0 and len(out) == 1:
+            out = out[0]
+        self.error_vec = self.error_vec_whole.getSubVector(self.is_)
+        return out
 
     def get_vector_to_zero(self):
         self.psi_whole.restoreSubVector(self.is_,self.psi)
@@ -401,8 +422,12 @@ class Integration_Tree:
                  parent=None,
                  I=None,
                  order=0,
-                 max_depth=6,
-                 dipole=None):
+                 max_depth=8,
+                 dipole=None, 
+                 rel_error = 0, 
+                 abs_error = 0, 
+                 norm_error = 0, 
+                 error = None):
         self.parent = parent
         self.I = I
         self.dipole = dipole
@@ -417,36 +442,26 @@ class Integration_Tree:
         self.integrand = integrand
         self.psi = psi.copy()
         self.my_depth = None
-        self.rel_error, self.abs_error, self.norm_error = (0,0,0)
+        self.rel_error, self.abs_error, self.norm_error = (rel_error, abs_error,norm_error)
+        self.error = None
+        if error is None and self.I is not None:
+            self.error = self.I.duplicate()
+            self.error.set(0)
+        else:
+            self.error = error
 
-    def generate_children(self):
+    def generate_children(self, to_convergence=True):
         if self.children:
             return self.converged
         a, b = self.limits.a, self.limits.b
         Im1 = self.lower_order_tree
 
-        # order = 2
-        # sets = 2
-        # steps = order * sets
-        # h = Fraction((b - a), steps)
-        # overall = h / 12
-        # coefficients = [1, 4, 1]
-        # total_coefficients = [
-        #     overall * coefficient for coefficient in coefficients
-        # ]
-        # locs = [i * h for i in range(order + 1)]
-        # loc_sets = [a + i * order * h for i in range(sets + 1)]
-
-        # intervals = [
-        #     Interval(a + (i - 1) * h, a + i * h) for i in range(1, steps + 1)
-        # ]
-        f = self.integrand
-        order = 3
-        sets = 3
+        order = 2
+        sets = 2
         steps = order * sets
         h = Fraction((b - a), steps)
-        overall = h * 3 / 4
-        coefficients = [1, 3, 3, 1]
+        overall = h / 12
+        coefficients = [1, 4, 1]
         total_coefficients = [
             overall * coefficient for coefficient in coefficients
         ]
@@ -456,7 +471,23 @@ class Integration_Tree:
         intervals = [
             Interval(a + (i - 1) * h, a + i * h) for i in range(1, steps + 1)
         ]
-
+        f = self.integrand
+        #order = 3
+        #sets = 3
+#        steps = order * sets
+#        h = Fraction((b - a), steps)
+#        overall = h * 3 / 4
+#        coefficients = [1, 3, 3, 1]
+#        total_coefficients = [
+#            overall * coefficient for coefficient in coefficients
+#        ]
+#        locs = [i * h for i in range(order + 1)]
+#        loc_sets = [a + i * order * h for i in range(sets + 1)]
+#
+#        intervals = [
+#            Interval(a + (i - 1) * h, a + i * h) for i in range(1, steps + 1)
+#        ]
+#
         logging.info(str(self.order) + " " * self.depth(
         ) + "Finding children for interval {}, with I = {}, with h: {}, for Node {}, for wavefunction: {}".format(self.limits, self.I, h, self, self.psi.name)
                      )
@@ -467,7 +498,7 @@ class Integration_Tree:
         #logging.debug(f"psi is: {self.psi}")
 
         Is = []
-        dipole_moment = []
+        #dipole_moment = []
 
         # for x in range(100, 1100, 100):
         #     mask = Im1.psi.duplicate()
@@ -516,24 +547,34 @@ class Integration_Tree:
         # #logging.debug(f"is converged {self.converged}")
 
         # the integral of the whole range for this order:
+        self.is_converged(sum(Is))
+        self.I = sum(Is)
 
-        self.children = tuple(
-            Integration_Tree(
-                (x0, x1),
-                self.convergence_criteria,
-                self.lower_order_tree,
-                self.psi,
-                self.integrand,
-                self,
-                I,
-                order=self.order)
-            for x0, x1, I in zip(loc_sets, loc_sets[1:], Is))
+        if self.error is None:
+            self.error = self.I.duplicate()
+            self.error.set(0)
+
+        if not self.converged or not to_convergence:
+            e = self.error.copy()
+            e.scale(.5)
+            self.children = tuple(
+                Integration_Tree(
+                    (x0, x1),
+                    self.convergence_criteria,
+                    self.lower_order_tree,
+                    self.psi,
+                    self.integrand,
+                    self,
+                    I,
+                    order=self.order, 
+                    rel_error=self.rel_error/sets, 
+                    abs_error=self.abs_error/sets, 
+                    norm_error=self.norm_error/sets,
+                    error=e)
+                for x0, x1, I in zip(loc_sets, loc_sets[1:], Is))
         #logging.debug("made children")
 
-        self.is_converged(sum(Is))
-
-        logging.info(str(self.order) + " " * self.depth() + "is converged {} for interval {}".format(self.converged,self.limits))
-        self.I = sum(Is)
+        logging.info(str(self.order) + " " * self.depth() + "is converged {} for interval {} with error: {}".format(self.converged,self.limits, (self.rel_error, self.abs_error, self.norm_error)))
 
         #logging.debug("free parents:")
         self.free_parents()
@@ -552,9 +593,9 @@ class Integration_Tree:
         #logging.debug(f"entering 'is_converged' with {I2} for {self}")
         if self.I is None:
             return False
-        self.converged, self.rel_error, self.abs_error, self.norm_error = self.convergence_criteria(I2, self.I, self.limits, self.psi.prototype)
+        self.converged, self.rel_error, self.abs_error, self.norm_error, self.error = self.convergence_criteria(I2, self.I, self.limits, H=self.integrand.psil.H)
         logging.info(str(self.order) + " " * self.depth(
-        ) + "converged? {}, {}, order: {}".format(repr(self.converged), self.limits,self.order)
+            ) + "converged? {}, {}, order: {}, error: {}".format(repr(self.converged), self.limits,self.order, (self.rel_error, self.abs_error, self.norm_error, self.error))
                      )
         return self.converged
 
@@ -627,7 +668,7 @@ class Integration_Tree:
             #logging.debug(f"found as self returning breadth_first_sum")
             return self.breadth_first_sum()
         elif not self.children:
-            self.generate_children()
+            self.generate_children(to_convergence=False)
 
         #logging.debug(
         #     f"trying to find or make {interval} in {list(map(lambda x: x.limits, self.children))}"
@@ -669,14 +710,18 @@ class Integration_Tree:
         ##logging.debug(f"entering 'breadth_first_sum': with {interval}")
         #if interval is None:
         if self.children is None:
-            return (self.rel_error, self.abs_error, self.norm_error)
+            #logging.info("breadth_first_error_sum: no children, error of: {}, converged = {}".format((self.rel_error,self.abs_error,self.norm_error), self.converged))
+            return (self.rel_error, self.abs_error, self.norm_error, self.error)
         else:
-            rel_ = sum(child.breadth_first_error_sum()[1] for child in self.children)
-            abs_ = sum(child.breadth_first_error_sum()[0] for child in self.children)
-            return (abs_, rel_)
+            rel_ = sum([child.breadth_first_error_sum()[0] for child in self.children])
+            abs_ = sum([child.breadth_first_error_sum()[1] for child in self.children])
+            norm_ = sum([child.breadth_first_error_sum()[2] for child in self.children])
+            err_ = sum([child.breadth_first_error_sum()[3] for child in self.children])
+            #logging.info("breadth_first_error_sum: got error of: {}".format((rel_,abs_,norm_)))
+            return (rel_, abs_, norm_, err_)
 
     def repr_helper(self, level=0):
-        rep = "<Node: error: {}, vec: {}, limits: {}, order: {}".format(self.breadth_first_error_sum(), self.I,self.limits,self.order)
+        rep = "<Node: error: {}, vec: {}, limits: {}, order: {}".format((self.rel_error, self.abs_error, self.norm_error), self.I,self.limits,self.order)
         repend = "\t" * level if self.children else ""
         repend += ">" if not self.children else ""
         repc = ""
@@ -691,19 +736,20 @@ class Integration_Tree:
         return self.repr_helper()
 
 
-def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
+def convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, mask, order):
     mask_ = None
     if mask is not None:
         mask_ = mask
     order_ = order
 
-    def convergence_criteria(Ia, Ib, interval, prototype_index = None):
+    def convergence_criteria(Ia, Ib, interval, prototype = None, H = None):
         #logging.debug(
             #f"entering 'convergence_cirteria' with Ia: {Ia}, Ib: {Ib}")
         #logging.debug(f"Ia: ")
         #logging.debug(print_vec(Ia))
         #logging.debug(f"Ib: ")
         #logging.debug(print_vec(Ib))
+        global prototype_index
         error = Ia.copy()
         error.abs()
         _, ma = error.max()
@@ -716,10 +762,18 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
         logging.debug("max:{}".format(m))
         #logging.debug(print_vec(error))
         error.abs()
+        abs_error_vec = error.copy()
         i_abs, m_abs = error.max()
         avg_abs = error.sum()
         norm_abs = error.norm()
         logging.debug("i_abs:{}, m_abs{}, avs_abs:{}, norm_abs:{}".format(i_abs,m_abs,avg_abs,norm_abs))
+
+        #scaled_error = error.copy()/H
+        #i_abs, m_abs = error.max()
+        #avg_abs = error.sum()
+        #norm_abs = error.norm()
+        #logging.debug("i_scaled:{}, m_scaled{}, avs_abs:{}, norm_abs:{}".format(i_abs,m_abs,avg_abs,norm_abs))
+
         #logging.debug(print_vec(error))
         error /= abs(Ia)
         array = error.getArray()
@@ -737,9 +791,12 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
         avg_rel = error.sum() / nonzero
         avg_abs = np.real(avg_abs / nonzero)
         norm_rel = error.norm()
+        
+
+
         logging.debug("i_rel:{}, m_rel{}, avs_rel:{}, norm_rel:{}".format(i_rel,m_rel,avg_rel,norm_rel))
         if rank == 0:
-             if prototype_index:
+             if prototype_index is not None:
                   loc_rel = prototype_index.get_level_values("n")[
                       i_rel], prototype_index.get_level_values("l")[i_rel]
                   loc_abs = prototype_index.get_level_values("n")[
@@ -756,7 +813,7 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
             avg_rel = error.sum() / error.size
             norm_rel = error.norm()
             if rank == 0:
-                if prototype_index:
+                if prototype_index is not None:
                     loc_ = prototype_index.get_level_values("n")[
                       i], prototype_index.get_level_values("l")[i]
                     logging.info(
@@ -765,12 +822,11 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, mask, order):
         if math.isnan(m_rel):
             raise Exception("nan!")
         
-        if (err_goal_rel is None or avg_abs / m < err_goal_rel
-                ) and (err_goal_abs is None or avg_abs < err_goal_abs 
-                        ) and (err_goal_norm is None or norm_rel < err_goal_norm):
-            return True, avg_abs, avg_rel, norm_rel
+        #if (err_goal_rel is None or avg_abs / m < err_goal_rel) and (err_goal_abs is None or avg_abs < err_goal_abs ) and (err_goal_norm is None or norm_rel < err_goal_norm):
+        if (err_goal_rel is not None and avg_abs / m < err_goal_rel) or (err_goal_abs is not None and avg_abs < err_goal_abs ) or (err_goal_norm is not None and norm_rel < err_goal_norm):
+            return True,  avg_rel, avg_abs, norm_rel, abs_error_vec
         else:
-            return False
+            return False, avg_rel, avg_abs, norm_rel, abs_error_vec
 
     return convergence_criteria
 
@@ -787,7 +843,7 @@ def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs, err_goal_n
         if o not in I_of_n:
             if psi.mask is not None:
                 convergence_func = convergence_criteria_gen(
-                    err_goal_rel, err_goal_abs, mask, o)
+                    err_goal_rel, err_goal_abs, err_goal_norm, psi.mask, o)
             else:
                 convergence_func = convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, None, o)
             I_of_n[o] = Integration_Tree(
@@ -805,9 +861,15 @@ def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs, err_goal_n
         )
     for o, psi in zip(count(1), psis[1:]):
         psi.psi += I_of_n[o].breadth_first_sum()
+        error = I_of_n[o].breadth_first_error_sum()
+        psi.error[0] += error[0]
+        psi.error[1] += error[1]
+        psi.error[2] += error[2]
+        psi.error_vec += error[3]
+        logging.info("error: {}".format(error))
         logging.info("I_of_n[o]: {}".format(I_of_n[o]))
-        logging.info("psi: {}".format(psi))
-
+        #logging.info("psi: {}".format(psi))
+        logging.info("psi: {}".format(psi.print_error_vec()))
 
     return psis
 
@@ -939,31 +1001,36 @@ def run_perturbation_calculation_recurse(D,
         gen_integrand(psil, psir, D, efield, time, **kwargs)
         for D, psil, psir in zip(D, psis[1:], psis)
     ]
-
+    total_error = 0
     for i, (efi, ti) in islice(
             enumerate(zip(efield, time)), steps, None, steps):
 
         with Timer(verbose=True) as timeit:
             psis = recursive_integrate(integrands, psis,
                                        Interval(i - steps, i), relative_error, absolute_error, norm_error)
-        
 
         norms = [p.psi_whole.norm() for p in psis]
         if (i % 1 == 0 or i in zero_indices) and rank == 0:
             print("step: {}, ef: {:1.2e}, t: {:4.1f},  psi_1_norm: {:1.2e}, ".format(i,efi,ti,norms[1])
-                  + "psi_2_norm: {:1.2e}, psi_3_norm: {:1.2e} ".format(norms[2], norms[3]))
+                    + "psi_2_norm: {:1.2e}, psi_3_norm: {:1.2e} error_1: {}, error_2: {}, error_3: {}".format(norms[2], norms[3],psis[1].error, psis[2].error, psis[3].error))
         if i % save_steps == 0 or i in zero_indices:
             pop_at_zero = {}
             # psis[1].psi_whole.view(PETSc.Viewer().STDOUT())
             # psis[2].psi_whole.view(PETSc.Viewer().STDOUT())
             # psis[3].psi_whole.view(PETSc.Viewer().STDOUT())
             z = psis[1].get_vector_to_zero()
+            z_e = psis[1].get_error_vector_to_zero()
             zz = psis[2].get_vector_to_zero()
+            zz_e = psis[2].get_error_vector_to_zero()
             zzz = psis[3].get_vector_to_zero()
+            zzz_e = psis[3].get_error_vector_to_zero()
             if rank == 0:
-                pop_at_zero[(1, i, ti, efi)] = z
-                pop_at_zero[(2, i, ti, efi)] = zz
-                pop_at_zero[(3, i, ti, efi)] = zzz
+                pop_at_zero[("1", i, ti, efi)] = z
+                pop_at_zero[("1e", i, ti, efi)] = z_e
+                pop_at_zero[("2", i, ti, efi)] = zz
+                pop_at_zero[("2e", i, ti, efi)] = zz_e
+                pop_at_zero[("3", i, ti, efi)] = zzz
+                pop_at_zero[("3e", i, ti, efi)] = zzz_e
                 logging.info("pop_at_zero: \n" + repr(pop_at_zero))
                 pop_df = pd.DataFrame(pop_at_zero)
                 pop_df.columns.set_names(["order","step", "time", "efield"], inplace=True)
@@ -993,7 +1060,7 @@ def run_perturbation_calculation_recurse(D,
 @click.option("--max_step", type=int, default=None)
 @click.option("--dense/--not_dense", default=False)
 @click.argument("other_args", nargs=-1, type=click.UNPROCESSED)
-def setup_and_run(hamiltonian_folder, efield_folder, out_file, key, dense, other_args, **options):
+def setup_and_run(hamiltonian_folder, efield_folder, out_file, key, dense, other_args, mask_absorber_power, **options):
 
     logging.basicConfig(filename="log_" + str(rank) + key  + ".log",
         format="[{}]:".format(rank) + '%(levelname)s:%(message)s', level=logging.INFO)
