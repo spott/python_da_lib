@@ -1,4 +1,4 @@
-#!/curc/tools/x86_64/rh6/software/python/3.5.2/gcc/5.1.0/bin/python3
+#!/usr/bin/env python3
 import sys
 
 
@@ -13,6 +13,8 @@ import math
 from fractions import Fraction
 import logging
 from mpi4py import MPI
+import objgraph
+
 
 import time
 
@@ -94,7 +96,7 @@ def vector_to_array_on_zero(vs):
     return results
 
 
-def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True, mask_absorber_power=2):
+def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True, mask_absorber_power=2, hdf_store=None):
     global prototype
     global prototype_index
     prototype = da.import_prototype_from_file(
@@ -280,7 +282,7 @@ class Wavefunction:
         if rank == 0:
             df = pd.Series(vs).T
             df.index = self.prototype_whole
-            return df.loc[df!=0]
+            return repr(df.loc[df!=0])
         return "not on this rank"
 
     def print_error_vec(self):
@@ -291,7 +293,7 @@ class Wavefunction:
             df = pd.DataFrame({"error":e, "wavefunction":wf},index=self.prototype_whole )
             df["rel_error"] = df["error"] / np.abs(df["wavefunction"])
             df.sort_values("rel_error",ascending=False, inplace=True)
-            return df.loc[df["wavefunction"]!= 0]
+            return repr(df.loc[df["wavefunction"]!= 0])
         return "not on this rank"
 
     def get_error_vector_to_zero(self):
@@ -318,14 +320,26 @@ class Wavefunction:
         return Wavefunction(self.psi_whole, self.prototype_whole, self.H_whole, self.name, self.is_list, self.mask_whole)
 
 
+# def get_gaussian_func(freq, intensity, cycles, height, cep):
+#     import scipy.interpolate
+#     efield = da.Abinitio(folder).laser.efield
+#     t = efield.time
+#     ef = efield.tdata
+#     ef_func = scipy.interpolate.CubicSpline(t, ef)
+#     zero_indices, zeros = find_zeros(t, ef)
 
 
 def get_efield(folder):
-    import scipy.interpolate
-    efield = da.Abinitio(folder).laser.efield
+    #import scipy.interpolate
+    laser = da.Abinitio(folder).laser
+    efield = laser.efield
     t = efield.time
     ef = efield.tdata
-    ef_func = scipy.interpolate.CubicSpline(t, ef)
+    #ef_func = scipy.interpolate.CubicSpline(t, ef)
+    if laser.shape == "gaussian":
+        ef_func = laser.gaussian_pulse(laser.freq, laser.intensity, laser.cycles, laser.height, laser.cep)
+    else:
+        ef_func = scipy.interpolate.CubicSpline(t, ef)
     zero_indices, zeros = find_zeros(t, ef)
     return {
         "zero_indices": zero_indices,
@@ -423,11 +437,11 @@ class Integration_Tree:
                  I=None,
                  order=0,
                  max_depth=8,
-                 dipole=None, 
-                 rel_error = 0, 
-                 abs_error = 0, 
-                 norm_error = 0, 
-                 error = None):
+                 dipole=None,
+                 rel_error=0,
+                 abs_error=0,
+                 norm_error=0,
+                 error=None):
         self.parent = parent
         self.I = I
         self.dipole = dipole
@@ -440,9 +454,9 @@ class Integration_Tree:
         self.order = order
         self.max_depth = max_depth
         self.integrand = integrand
-        self.psi = psi.copy()
+        self.psi = psi
         self.my_depth = None
-        self.rel_error, self.abs_error, self.norm_error = (rel_error, abs_error,norm_error)
+        self.rel_error, self.abs_error, self.norm_error = (rel_error, abs_error, norm_error)
         self.error = None
         if error is None and self.I is not None:
             self.error = self.I.duplicate()
@@ -489,11 +503,11 @@ class Integration_Tree:
 #        ]
 #
         logging.info(str(self.order) + " " * self.depth(
-        ) + "Finding children for interval {}, with I = {}, with h: {}, for Node {}, for wavefunction: {}".format(self.limits, self.I, h, self, self.psi.name)
+        ) + "Finding children, h: {}, for Node {}, for wavefunction: {}".format(h, self, self.psi.name)
                      )
-        logging.info(str(self.order) + " " * self.depth(
-        ) + " need intervals: {} for order: {}, sets: {}, h: {}, total_coefficients: {}, locs: {}, loc_sets: {}".format(intervals,order,sets,h,total_coefficients,locs,loc_sets)
-                     )
+        #logging.info(str(self.order) + " " * self.depth(
+        #) + " need intervals: {} for order: {}, sets: {}, total_coefficients: {}, locs: {}, loc_sets: {}".format(intervals,order,sets,h,total_coefficients,locs,loc_sets)
+                     #)
 
         #logging.debug(f"psi is: {self.psi}")
 
@@ -593,10 +607,12 @@ class Integration_Tree:
         #logging.debug(f"entering 'is_converged' with {I2} for {self}")
         if self.I is None:
             return False
+        if self.error:
+            self.error.destroy()
         self.converged, self.rel_error, self.abs_error, self.norm_error, self.error = self.convergence_criteria(I2, self.I, self.limits, H=self.integrand.psil.H)
-        logging.info(str(self.order) + " " * self.depth(
-            ) + "converged? {}, {}, order: {}, error: {}".format(repr(self.converged), self.limits,self.order, (self.rel_error, self.abs_error, self.norm_error, self.error))
-                     )
+        # logging.info(str(self.order) + " " * self.depth(
+        #     ) + "converged? {}, {}, order: {}, error: {}".format(repr(self.converged), self.limits,self.order, (self.rel_error, self.abs_error, self.norm_error, self.error)))
+
         return self.converged
 
     def free(self):
@@ -607,14 +623,13 @@ class Integration_Tree:
     def free_parents(self):
         if not self.parent or not self.parent.parent:
             return
-        parent = self.parent
-
         # if parent is to the left, and the right has children,
         #
         if all(
                 map(lambda x: x.children is not None,
                     self.parent.parent.children)):
             self.parent.parent.I.destroy()
+            self.parent.parent.error.destroy()
         else:
             return
 
@@ -643,7 +658,7 @@ class Integration_Tree:
         elif not self.children:
             raise IndexError(
                 "interval: {} not below this node: {}".format(interval,repr(self)))
-        for child in children:
+        for child in self.children:
             if interval in self.child:
                 return self.children[0][interval]
         # else:
@@ -713,15 +728,16 @@ class Integration_Tree:
             #logging.info("breadth_first_error_sum: no children, error of: {}, converged = {}".format((self.rel_error,self.abs_error,self.norm_error), self.converged))
             return (self.rel_error, self.abs_error, self.norm_error, self.error)
         else:
-            rel_ = sum([child.breadth_first_error_sum()[0] for child in self.children])
-            abs_ = sum([child.breadth_first_error_sum()[1] for child in self.children])
-            norm_ = sum([child.breadth_first_error_sum()[2] for child in self.children])
-            err_ = sum([child.breadth_first_error_sum()[3] for child in self.children])
+            return tuple(map(sum,zip(*[child.breadth_first_error_sum() for child in self.children])))
+            # rel_ = sum()
+            # abs_ = sum([child.breadth_first_error_sum()[1] for child in self.children])
+            # norm_ = sum([child.breadth_first_error_sum()[2] for child in self.children])
+            # err_ = sum([child.breadth_first_error_sum()[3] for child in self.children])
             #logging.info("breadth_first_error_sum: got error of: {}".format((rel_,abs_,norm_)))
-            return (rel_, abs_, norm_, err_)
+            # return (rel_, abs_, norm_, err_)
 
     def repr_helper(self, level=0):
-        rep = "<Node: error: {}, vec: {}, limits: {}, order: {}".format((self.rel_error, self.abs_error, self.norm_error), self.I,self.limits,self.order)
+        rep = "<Node: depth: {}, error: {}, limits: {}, order: {}".format(self.depth(), (self.rel_error, self.abs_error, self.norm_error), self.limits,self.order)
         repend = "\t" * level if self.children else ""
         repend += ">" if not self.children else ""
         repc = ""
@@ -742,7 +758,7 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, mask, or
         mask_ = mask
     order_ = order
 
-    def convergence_criteria(Ia, Ib, interval, prototype = None, H = None):
+    def convergence_criteria(Ia, Ib, interval, H = None):
         #logging.debug(
             #f"entering 'convergence_cirteria' with Ia: {Ia}, Ib: {Ib}")
         #logging.debug(f"Ia: ")
@@ -753,10 +769,12 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, mask, or
         error = Ia.copy()
         error.abs()
         _, ma = error.max()
+        error.destroy()
         error = Ib.copy()
         error.abs()
         _, mb = error.max()
         m = max(ma, mb)
+        error.destroy()
         error = Ia.copy()
         error -= Ib
         logging.debug("max:{}".format(m))
@@ -791,54 +809,54 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, mask, or
         avg_rel = error.sum() / nonzero
         avg_abs = np.real(avg_abs / nonzero)
         norm_rel = error.norm()
-        
 
-
-        logging.debug("i_rel:{}, m_rel{}, avs_rel:{}, norm_rel:{}".format(i_rel,m_rel,avg_rel,norm_rel))
-        if rank == 0:
-             if prototype_index is not None:
-                  loc_rel = prototype_index.get_level_values("n")[
-                      i_rel], prototype_index.get_level_values("l")[i_rel]
-                  loc_abs = prototype_index.get_level_values("n")[
-                      i_abs], prototype_index.get_level_values("l")[i_abs]
-                  logging.info( "max relative error for {interval} is {m_rel} at {loc_rel}, average is {avg_rel} and norm is {norm_rel} goal is {err_goal_rel}".format(interval = interval, m_rel=m_rel,loc_rel=loc_rel,avg_rel=avg_rel, norm_rel=norm_rel,err_goal_rel=err_goal_rel))
-                  logging.info("max absolute error for {interval} is {m_abs} compared to max {m} is {mabs_m} at {loc_abs}, average is {avg_abs} and norm is {norm_abs} goal is {err_goal_abs}".format(interval=interval,m_abs=m_abs,m=m,mabs_m=m_abs/m, loc_abs=loc_abs,avg_abs=avg_abs,norm_abs=norm_abs,err_goal_abs=err_goal_abs))
-             else:
-                  logging.info(
-                     "max relative error for {} is {}, average is {} and norm is {} goal is {}".format(interval,m_rel,avg_rel,norm_rel,err_goal_rel))
-                  logging.info("max absolute error for {} is {} compared to max {} is {}, average is {} and norm is {} goal is {}".format(interval, m_abs, m, m_abs/m, avg_abs, norm_abs, err_goal_abs))
+        #logging.debug("i_rel:{}, m_rel{}, avs_rel:{}, norm_rel:{}".format(i_rel,m_rel,avg_rel,norm_rel))
+        # if rank == 0:
+        #      if prototype_index is not None:
+        #           loc_rel = prototype_index.get_level_values("n")[
+        #               i_rel], prototype_index.get_level_values("l")[i_rel]
+        #           loc_abs = prototype_index.get_level_values("n")[
+        #               i_abs], prototype_index.get_level_values("l")[i_abs]
+        #           logging.info( "max relative error for {interval} is {m_rel} at {loc_rel}, average is {avg_rel} and norm is {norm_rel} goal is {err_goal_rel}".format(interval = interval, m_rel=m_rel,loc_rel=loc_rel,avg_rel=avg_rel, norm_rel=norm_rel,err_goal_rel=err_goal_rel))
+        #           logging.info("max absolute error for {interval} is {m_abs} compared to max {m} is {mabs_m} at {loc_abs}, average is {avg_abs} and norm is {norm_abs} goal is {err_goal_abs}".format(interval=interval,m_abs=m_abs,m=m,mabs_m=m_abs/m, loc_abs=loc_abs,avg_abs=avg_abs,norm_abs=norm_abs,err_goal_abs=err_goal_abs))
+        #      else:
+        #           logging.info(
+        #              "max relative error for {} is {}, average is {} and norm is {} goal is {}".format(interval,m_rel,avg_rel,norm_rel,err_goal_rel))
+        #           logging.info("max absolute error for {} is {} compared to max {} is {}, average is {} and norm is {} goal is {}".format(interval, m_abs, m, m_abs/m, avg_abs, norm_abs, err_goal_abs))
         if mask_ is not None:
             error.pointwiseMult(error, mask_)
             i, m_rel = error.max()
             avg_rel = error.sum() / error.size
             norm_rel = error.norm()
-            if rank == 0:
-                if prototype_index is not None:
-                    loc_ = prototype_index.get_level_values("n")[
-                      i], prototype_index.get_level_values("l")[i]
-                    logging.info(
-                      "after mask, max error for {interval} is {m_rel} at {loc_}, average error is: {avg_rel} and norm is {norm_rel}".format(interval=interval, m_rel=m_rel, loc_=loc_, avg_rel=avg_rel, norm_rel=norm_rel) + 
-                      "  err_goal is {err_goal_rel}".format(err_goal_rel=err_goal_rel))
+            # if rank == 0:
+            #     if prototype_index is not None:
+            #         loc_ = prototype_index.get_level_values("n")[
+            #           i], prototype_index.get_level_values("l")[i]
+            #         logging.info(
+            #           "after mask, max error for {interval} is {m_rel} at {loc_}, average error is: {avg_rel} and norm is {norm_rel}".format(interval=interval, m_rel=m_rel, loc_=loc_, avg_rel=avg_rel, norm_rel=norm_rel) +
+            #           "  err_goal is {err_goal_rel}".format(err_goal_rel=err_goal_rel))
         if math.isnan(m_rel):
             raise Exception("nan!")
         
         #if (err_goal_rel is None or avg_abs / m < err_goal_rel) and (err_goal_abs is None or avg_abs < err_goal_abs ) and (err_goal_norm is None or norm_rel < err_goal_norm):
-        if (err_goal_rel is not None and avg_abs / m < err_goal_rel) or (err_goal_abs is not None and avg_abs < err_goal_abs ) or (err_goal_norm is not None and norm_rel < err_goal_norm):
-            return True,  avg_rel, avg_abs, norm_rel, abs_error_vec
+        error.destroy()
+        if (err_goal_rel is not None and avg_abs / m < err_goal_rel) or (err_goal_abs is not None and m_abs < err_goal_abs ) or (err_goal_norm is not None and norm_rel < err_goal_norm):
+            return True,  avg_rel, m_abs, norm_rel, abs_error_vec
         else:
-            return False, avg_rel, avg_abs, norm_rel, abs_error_vec
+            return False, avg_rel, m_abs, norm_rel, abs_error_vec
 
     return convergence_criteria
 
 
 def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs, err_goal_norm):
+    print("recursive_integrate: beginning:")
+    objgraph.show_growth(limit=10)
 
     I_of_n = OrderedDict()
 
     # this allows us to generalize the algorithm without special cases.
     if 0 not in I_of_n:
         I_of_n[0] = DummyDict(psis[0])
-
     for o, psi, f in zip(count(1), psis[1:], fs):
         if o not in I_of_n:
             if psi.mask is not None:
@@ -866,11 +884,14 @@ def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs, err_goal_n
         psi.error[1] += error[1]
         psi.error[2] += error[2]
         psi.error_vec += error[3]
-        logging.info("error: {}".format(error))
         logging.info("I_of_n[o]: {}".format(I_of_n[o]))
-        #logging.info("psi: {}".format(psi))
-        logging.info("psi: {}".format(psi.print_error_vec()))
+        logging.info("psi_{}: \n{}".format(o, psi.print_error_vec()))
+        logging.info("error: {}".format(error))
 
+
+    del I_of_n
+    print("recursive_integrate: end:")
+    objgraph.show_growth(limit=10)
     return psis
 
 
@@ -984,7 +1005,7 @@ def run_perturbation_calculation_recurse(D,
                                          hdf_key,
                                          relative_error=1e-3,
                                          absolute_error=1e-16,
-                                         norm_error=1,
+                                         norm_error=None,
                                          steps=3*3,
                                          save_steps=1,
                                          max_step=None,

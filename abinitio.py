@@ -100,24 +100,37 @@ class Laser(object):
             self.ef_ = ef
         return Fourier(self.time, self.ef_)
 
+    @staticmethod
+    def gaussian_pulse(freq, intensity, cycles, height, cep):
+        freq_ = freq
+        cycles_ = cycles
+        height_ = height
+        cep_ = cep
+        intensity_ = np.sqrt(intensity / atomic.intensity)
+        fwhm_time = np.pi * 2 * cycles_ / freq_
+        mean = fwhm_time * np.sqrt(np.log(1. / height_))
+        mean /= (2. * np.sqrt(np.log(2.)))
+
+        if not(cep_ > np.pi * 2 or cep_ < -np.pi * 2):
+            cycles_till_mean = int(mean * freq_ / 2*np.pi)
+            remainder = cep_ / (2. * np.pi)
+            if mean < cycles_till_mean * 2 * np.pi / freq_:
+                cycles_till_mean += 1
+            mean = (cycles_till_mean + remainder) * (np.pi * 2 / freq_)
+
+        std_dev = fwhm_time / np.sqrt(8. * np.log(2.))
+
+        def pulse(t):
+            ef = np.exp(-(t - mean)**2 / (2. * std_dev**2))
+            ef *= np.sin(freq_ * (t - mean/2.) + cep_)
+            ef *= intensity_
+            return ef
+        return pulse
+
     def find_efield(self):
         print("making efield.")
         if self.shape == "gaussian":
-            fwhm_time = np.pi * 2 * self.cycles / self.freq
-            mean = fwhm_time * np.sqrt(np.log(1. / self.height))
-            mean /= (2. * np.sqrt(np.log(2.)))
-
-            if not(self.cep > np.pi * 2 or self.cep < -np.pi * 2):
-                cycles_till_mean = int(mean * self.freq / 2*np.pi)
-                remainder = self.cep / (2. * np.pi)
-                if mean < cycles_till_mean * 2 * np.pi / self.freq:
-                    cycles_till_mean += 1
-                mean = (cycles_till_mean + remainder) * (np.pi * 2 / self.freq)
-
-            std_dev = fwhm_time / np.sqrt(8. * np.log(2.))
-            ef = np.exp(-(self.time - mean)**2 / (2. * std_dev**2))
-            ef *= np.sin(self.freq * (self.time - mean/2.) + self.cep)
-            ef = ef * np.sqrt(self.intensity / atomic.intensity)
+            return Laser.gaussian_pulse(self.freq, self.intensity, self.cycles, self.height, self.cep)(self.time)
         elif self.shape == "sin_squared":
             ef = np.sin(self.freq * self.time / (self.cycles * 2))**2
             ef *= np.sin(self.freq * self.time)
