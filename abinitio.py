@@ -56,8 +56,8 @@ class Laser(object):
         self.ef_ = None
 
     def __repr__(self):
-        return "<Laser: {λ: %f, cycles: %d, intensity: %e}>" % (
-            self.wavelength, self.cycles, self.intensity)
+        return "<Laser: {λ: %1.2f, cycles: %d, intensity: %1.2e, envelope: %s, cep: %1.3f, height: %1.2e}>" % (
+            self.wavelength, self.cycles, self.intensity, self.shape, self.cep, self.height)
 
     @property
     def zeros(self):
@@ -112,7 +112,7 @@ class Laser(object):
         mean /= (2. * np.sqrt(np.log(2.)))
 
         if not(cep_ > np.pi * 2 or cep_ < -np.pi * 2):
-            cycles_till_mean = int(mean * freq_ / 2*np.pi)
+            cycles_till_mean = int(mean * freq_ / ( 2*np.pi ))
             remainder = cep_ / (2. * np.pi)
             if mean < cycles_till_mean * 2 * np.pi / freq_:
                 cycles_till_mean += 1

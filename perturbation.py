@@ -96,7 +96,7 @@ def vector_to_array_on_zero(vs):
     return results
 
 
-def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True, mask_absorber_power=2, hdf_store=None):
+def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True, mask_absorber_power=2, hdf_store=None, hdf_key=None):
     global prototype
     global prototype_index
     prototype = da.import_prototype_from_file(
@@ -181,6 +181,16 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True,
     n_1_mask_.setValue(0, 0)
     l_3_mask_ = D.createVecLeft()
     l_3_mask_.set(1)
+
+    if hdf_store and hdf_key:
+        nrows = hdf_store.get_storer(hdf_key).nrows
+        df = hdf_store.select('df',start=nrows-len(prototype),stop=nrows)
+        for i,x in enumerate(df["1"].take(l_0_list).as_matrix()):
+            psi_1_whole.setValue(i, x)
+        for i,x in enumerate(df["2"].take(l_0_list).as_matrix()):
+            psi_2_whole.setValue(i, x)
+        for i,x in enumerate(df["3"].take(l_0_list).as_matrix()):
+            psi_3_whole.setValue(i, x)
 
     logging.info("finished creating psis")
 
@@ -330,11 +340,12 @@ class Wavefunction:
 
 
 def get_efield(folder):
-    #import scipy.interpolate
+    import scipy.interpolate
     laser = da.Abinitio(folder).laser
     efield = laser.efield
     t = efield.time
     ef = efield.tdata
+    logging.info(laser)
     #ef_func = scipy.interpolate.CubicSpline(t, ef)
     if laser.shape == "gaussian":
         ef_func = laser.gaussian_pulse(laser.freq, laser.intensity, laser.cycles, laser.height, laser.cep)
@@ -1026,6 +1037,7 @@ def run_perturbation_calculation_recurse(D,
     for i, (efi, ti) in islice(
             enumerate(zip(efield, time)), steps, None, steps):
 
+        #assert kwargs["efield_fn"](ti) == efi, f"efield_fn: {kwargs['efield_fn'](ti)}, efi: {efi}"
         with Timer(verbose=True) as timeit:
             psis = recursive_integrate(integrands, psis,
                                        Interval(i - steps, i), relative_error, absolute_error, norm_error)
