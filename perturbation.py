@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/curc/sw/python/3.5.1/bin/python3
 import sys
 
 
@@ -13,7 +13,6 @@ import math
 from fractions import Fraction
 import logging
 from mpi4py import MPI
-import objgraph
 
 
 import time
@@ -224,9 +223,11 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True,
 
 #    logging.info(f"psi_0_whole: size: {psi_0_whole.getSize()}")
 #    logging.info(f"prototype: size: {prototype_index.shape}")
-#    logging.info(f"vec is: \n{ print_vec(psi_0_whole) }")
+    #logging.info(f"psi_0 is: \n{ print_vec(psi_0_whole) }")
     # logging.info(f"psi_1: size: {psi_1.getSize()}")
-    # logging.info(f"vec is: \n{ print_vec(psi_1, prototype_index) }")
+    #logging.info(f"psi_1: \n{ print_vec(psi_1_whole) }")
+    #logging.info(f"psi_2: \n{ print_vec(psi_1_whole) }")
+    #logging.info(f"psi_3: \n{ print_vec(psi_1_whole) }")
     # logging.info(f"psi_2: size: {psi_2.getSize()}")
     # logging.info(f"vec is: \n{ print_vec(psi_2, prototype_index) }")
     # logging.info(f"psi_3: size: {psi_3.getSize()}")
@@ -238,7 +239,10 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True,
     psi_3 = Wavefunction(psi_3_whole, prototype_index, H, "psi_3", l_1_list, l_3_mask_)
 
     #logging.info(f"prototype: size: {prototype_index.shape}")
-    #logging.info(f"vec is: \n{ psi_0.print_vector() }")
+    logging.info("vec is: \n{}".format(psi_0.print_vector() ))
+    logging.info("vec is: \n{}".format(psi_1.print_vector() ))
+    logging.info("vec is: \n{}".format(psi_2.print_vector() ))
+    logging.info("vec is: \n{}".format(psi_3.print_vector() ))
 
     ret_dict = {
         "D": [D_01, D_12, D_21],
@@ -289,6 +293,7 @@ class Wavefunction:
 
     def print_vector(self):
         vs = self.get_vector_to_zero()
+        m = self.get_mask_vector_to_zero()
         if rank == 0:
             df = pd.Series(vs).T
             df.index = self.prototype_whole
@@ -316,6 +321,14 @@ class Wavefunction:
 
     def get_vector_to_zero(self):
         self.psi_whole.restoreSubVector(self.is_,self.psi)
+        out = vector_to_array_on_zero(self.psi_whole)
+        if rank == 0 and len(out) == 1:
+            out = out[0]
+        self.psi = self.psi_whole.getSubVector(self.is_)
+        return out
+
+    def get_vector_to_zero(self):
+        self.mask_whole.restoreSubVector(self.is_,self.mask_whole)
         out = vector_to_array_on_zero(self.psi_whole)
         if rank == 0 and len(out) == 1:
             out = out[0]
@@ -822,30 +835,30 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, mask, or
         norm_rel = error.norm()
 
         #logging.debug("i_rel:{}, m_rel{}, avs_rel:{}, norm_rel:{}".format(i_rel,m_rel,avg_rel,norm_rel))
-        # if rank == 0:
-        #      if prototype_index is not None:
-        #           loc_rel = prototype_index.get_level_values("n")[
-        #               i_rel], prototype_index.get_level_values("l")[i_rel]
-        #           loc_abs = prototype_index.get_level_values("n")[
-        #               i_abs], prototype_index.get_level_values("l")[i_abs]
-        #           logging.info( "max relative error for {interval} is {m_rel} at {loc_rel}, average is {avg_rel} and norm is {norm_rel} goal is {err_goal_rel}".format(interval = interval, m_rel=m_rel,loc_rel=loc_rel,avg_rel=avg_rel, norm_rel=norm_rel,err_goal_rel=err_goal_rel))
-        #           logging.info("max absolute error for {interval} is {m_abs} compared to max {m} is {mabs_m} at {loc_abs}, average is {avg_abs} and norm is {norm_abs} goal is {err_goal_abs}".format(interval=interval,m_abs=m_abs,m=m,mabs_m=m_abs/m, loc_abs=loc_abs,avg_abs=avg_abs,norm_abs=norm_abs,err_goal_abs=err_goal_abs))
-        #      else:
-        #           logging.info(
-        #              "max relative error for {} is {}, average is {} and norm is {} goal is {}".format(interval,m_rel,avg_rel,norm_rel,err_goal_rel))
-        #           logging.info("max absolute error for {} is {} compared to max {} is {}, average is {} and norm is {} goal is {}".format(interval, m_abs, m, m_abs/m, avg_abs, norm_abs, err_goal_abs))
+        if rank == 0:
+             if prototype_index is not None:
+                  loc_rel = prototype_index.get_level_values("n")[
+                      i_rel], prototype_index.get_level_values("l")[i_rel]
+                  loc_abs = prototype_index.get_level_values("n")[
+                      i_abs], prototype_index.get_level_values("l")[i_abs]
+                  logging.info( "max relative error for {interval} is {m_rel} at {loc_rel}, average is {avg_rel} and norm is {norm_rel} goal is {err_goal_rel}".format(interval = interval, m_rel=m_rel,loc_rel=loc_rel,avg_rel=avg_rel, norm_rel=norm_rel,err_goal_rel=err_goal_rel))
+                  logging.info("max absolute error for {interval} is {m_abs} compared to max {m} is {mabs_m} at {loc_abs}, average is {avg_abs} and norm is {norm_abs} goal is {err_goal_abs}".format(interval=interval,m_abs=m_abs,m=m,mabs_m=m_abs/m, loc_abs=loc_abs,avg_abs=avg_abs,norm_abs=norm_abs,err_goal_abs=err_goal_abs))
+             else:
+                  logging.info(
+                     "max relative error for {} is {}, average is {} and norm is {} goal is {}".format(interval,m_rel,avg_rel,norm_rel,err_goal_rel))
+                  logging.info("max absolute error for {} is {} compared to max {} is {}, average is {} and norm is {} goal is {}".format(interval, m_abs, m, m_abs/m, avg_abs, norm_abs, err_goal_abs))
         if mask_ is not None:
             error.pointwiseMult(error, mask_)
             i, m_rel = error.max()
             avg_rel = error.sum() / error.size
             norm_rel = error.norm()
-            # if rank == 0:
-            #     if prototype_index is not None:
-            #         loc_ = prototype_index.get_level_values("n")[
-            #           i], prototype_index.get_level_values("l")[i]
-            #         logging.info(
-            #           "after mask, max error for {interval} is {m_rel} at {loc_}, average error is: {avg_rel} and norm is {norm_rel}".format(interval=interval, m_rel=m_rel, loc_=loc_, avg_rel=avg_rel, norm_rel=norm_rel) +
-            #           "  err_goal is {err_goal_rel}".format(err_goal_rel=err_goal_rel))
+            if rank == 0:
+                if prototype_index is not None:
+                    loc_ = prototype_index.get_level_values("n")[
+                      i], prototype_index.get_level_values("l")[i]
+                    logging.info(
+                      "after mask, max error for {interval} is {m_rel} at {loc_}, average error is: {avg_rel} and norm is {norm_rel}".format(interval=interval, m_rel=m_rel, loc_=loc_, avg_rel=avg_rel, norm_rel=norm_rel) +
+                      "  err_goal is {err_goal_rel}".format(err_goal_rel=err_goal_rel))
         if math.isnan(m_rel):
             raise Exception("nan!")
         
@@ -860,8 +873,8 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, mask, or
 
 
 def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs, err_goal_norm):
-    print("recursive_integrate: beginning:")
-    objgraph.show_growth(limit=10)
+    #print("recursive_integrate: beginning:")
+    #objgraph.show_growth(limit=10)
 
     I_of_n = OrderedDict()
 
@@ -901,8 +914,8 @@ def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs, err_goal_n
 
 
     del I_of_n
-    print("recursive_integrate: end:")
-    objgraph.show_growth(limit=10)
+    #print("recursive_integrate: end:")
+    #objgraph.show_growth(limit=10)
     return psis
 
 
