@@ -31,6 +31,8 @@ class Timer(object):
         self.msecs = self.secs * 1000  # millisecs
         if self.verbose:
             logging.info('elapsed time: %f ms' % self.msecs)
+            if rank == 0:
+                print('elapsed time: %f ms' % self.msecs)
 
 import petsc4py
 petsc4py.init(sys.argv)
@@ -95,7 +97,7 @@ def vector_to_array_on_zero(vs):
     return results
 
 
-def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True, mask_absorber_power=2, hdf_store=None, hdf_key=None):
+def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True, mask_absorber_power=2, hdf_store=None, hdf_key=None, nmax=None):
     global prototype
     global prototype_index
     prototype = da.import_prototype_from_file(
@@ -175,11 +177,11 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True,
     psi_3_whole = D.createVecLeft()
     psi_3_whole.set(0)
     psi_3_whole.assemble()
-    n_1_mask_ = D.createVecLeft()
-    n_1_mask_.set(1)
-    n_1_mask_.setValue(0, 0)
-    l_3_mask_ = D.createVecLeft()
-    l_3_mask_.set(1)
+    #n_1_mask_ = D.createVecLeft()
+    #n_1_mask_.set(1)
+    #n_1_mask_.setValue(0, 0)
+    #l_3_mask_ = D.createVecLeft()
+    #l_3_mask_.set(1)
 
     if hdf_store and hdf_key:
         nrows = hdf_store.get_storer(hdf_key).nrows
@@ -193,31 +195,50 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True,
 
     logging.info("finished creating psis")
 
-    n_max = max([x[0] for x in prototype])
-    startn, endn = n_1_mask_.getOwnershipRange()
-    startl, endl = l_3_mask_.getOwnershipRange()
-    logging.info("ownership ranges: {}, {}, {}, {}".format(startn, endn, startl, endl))
-    for i, (n, l, m, j, e) in enumerate(prototype):
-        if l == 0 and startn <= i < endn:
-            if n_max - n < absorber_size[0]:
-                val = np.sin(
-                    (n_max - n) * np.pi / (2 * absorber_size[0]))**(mask_absorber_power)
-                n_1_mask_.setValue(i, val)
-        if l == 2 and startn <= i < endn:
-            if n_max - n < absorber_size[0]:
-                val = np.sin(
-                    (n_max - n) * np.pi / (2 * absorber_size[0]))**(mask_absorber_power)
-                n_1_mask_.setValue(i, val)
-        if l == 1 and startl <= i < endl:
-            if n_max - n < absorber_size[1]:
-                val = np.sin(
-                    (n_max - n) * np.pi / (2 * absorber_size[1]))**(mask_absorber_power)
-                l_3_mask_.setValue(i, val)
-        if l == 3 and startl <= i < endl:
-            l_3_mask_.setValue(i, 0)
-    logging.info("finished finding mask values, assembling")
-    n_1_mask_.assemble()
-    l_3_mask_.assemble()
+    if nmax is None:
+        nmax = [None for _ in range(4)]
+    logging.info("nmaxes set to: {}".format(nmax))
+    err_mask = [psi_1_whole.duplicate() for _ in nmax]
+    [x.set(1) for x in err_mask]
+    for order, nm in enumerate(nmax):
+        l_ = [0]
+        if order == 1:
+            l_ = [1]
+        if order == 2:
+            l_ = [0,2]
+        if order == 3:
+            l_ = [1]
+        if nm is not None:
+            startn, endn = err_mask[order].getOwnershipRange()
+            for i, (n, l, m, j, e) in enumerate(prototype):
+                if l in l_ and n > nm and startn <= i < endn:
+                    err_mask[order].setValue(i, 0)
+            err_mask[order].assemble()
+#    n_max = max([x[0] for x in prototype])
+#    startn, endn = n_1_mask_.getOwnershipRange()
+#    startl, endl = l_3_mask_.getOwnershipRange()
+#    logging.info("ownership ranges: {}, {}, {}, {}".format(startn, endn, startl, endl))
+#    for i, (n, l, m, j, e) in enumerate(prototype):
+#        if l == 0 and startn <= i < endn:
+#            if n_max - n < absorber_size[0]:
+#                val = np.sin(
+#                    (n_max - n) * np.pi / (2 * absorber_size[0]))**(mask_absorber_power)
+#                n_1_mask_.setValue(i, val)
+#        if l == 2 and startn <= i < endn:
+#            if n_max - n < absorber_size[0]:
+#                val = np.sin(
+#                    (n_max - n) * np.pi / (2 * absorber_size[0]))**(mask_absorber_power)
+#                n_1_mask_.setValue(i, val)
+#        if l == 1 and startl <= i < endl:
+#            if n_max - n < absorber_size[1]:
+#                val = np.sin(
+#                    (n_max - n) * np.pi / (2 * absorber_size[1]))**(mask_absorber_power)
+#                l_3_mask_.setValue(i, val)
+#        if l == 3 and startl <= i < endl:
+#            l_3_mask_.setValue(i, 0)
+#    logging.info("finished finding mask values, assembling")
+#    n_1_mask_.assemble()
+#    l_3_mask_.assemble()
 
     logging.info("finished getting sub vectors")
 
@@ -233,10 +254,10 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True,
     # logging.info(f"psi_3: size: {psi_3.getSize()}")
     # logging.info(f"vec is: \n{ print_vec(psi_3, prototype_index) }")
 
-    psi_0 = Wavefunction(psi_0_whole, prototype_index, H, "psi_0", l_0_list)
-    psi_1 = Wavefunction(psi_1_whole, prototype_index, H, "psi_1", l_1_list)
-    psi_2 = Wavefunction(psi_2_whole, prototype_index, H, "psi_2", l_0_list + l_2_list, n_1_mask_)
-    psi_3 = Wavefunction(psi_3_whole, prototype_index, H, "psi_3", l_1_list, l_3_mask_)
+    psi_0 = Wavefunction(psi_0_whole, prototype_index, H, "psi_0", l_0_list, err_mask[0])
+    psi_1 = Wavefunction(psi_1_whole, prototype_index, H, "psi_1", l_1_list, err_mask[1])
+    psi_2 = Wavefunction(psi_2_whole, prototype_index, H, "psi_2", l_0_list + l_2_list, err_mask[2])
+    psi_3 = Wavefunction(psi_3_whole, prototype_index, H, "psi_3", l_1_list, err_mask[3])
 
     #logging.info(f"prototype: size: {prototype_index.shape}")
     logging.info("vec is: \n{}".format(psi_0.print_vector() ))
@@ -252,7 +273,7 @@ def initialize_objects(hamiltonian_folder, absorber_size=[200, 200], dense=True,
     # logging.debug("leaving 'initialize_object'")
     return ret_dict
 
-class Wavefunction:
+class Wavefunction :
 
     def __init__(self, psi, prototype, H, name, is_list=None, mask=None):
         #logging.info("creating wavefunction for: " + name)
@@ -293,7 +314,7 @@ class Wavefunction:
 
     def print_vector(self):
         vs = self.get_vector_to_zero()
-        m = self.get_mask_vector_to_zero()
+        #m = self.get_mask_vector_to_zero()
         if rank == 0:
             df = pd.Series(vs).T
             df.index = self.prototype_whole
@@ -327,13 +348,37 @@ class Wavefunction:
         self.psi = self.psi_whole.getSubVector(self.is_)
         return out
 
-    def get_vector_to_zero(self):
-        self.mask_whole.restoreSubVector(self.is_,self.mask_whole)
-        out = vector_to_array_on_zero(self.psi_whole)
-        if rank == 0 and len(out) == 1:
-            out = out[0]
-        self.psi = self.psi_whole.getSubVector(self.is_)
-        return out
+    def find_errors(self):
+        temp = self.error_vec.copy()
+        temp.pointwiseMult(temp, self.mask)
+        temp.abs()
+        abs_ = temp.sum()
+        temp /= abs(self.psi)
+
+        array = temp.getArray()
+        array = np.nan_to_num(array)
+        nonzero_ = np.array(np.count_nonzero(array), 'i')
+        nonzero = np.array(0.0,'i')
+        MPI.COMM_WORLD.Allreduce([nonzero_, MPI.INT],
+        [nonzero, MPI.INT],
+        op=MPI.SUM)
+
+        #logging.info("array: {}".format(array))
+        temp.setArray(array)
+        rel = temp.sum() / nonzero
+        norm = temp.norm()
+        abs_ /= nonzero
+
+        self.error = [rel, abs_, norm]
+        return
+
+    #def get_vector_to_zero(self):
+        #self.mask_whole.restoreSubVector(self.is_,self.mask_whole)
+        #out = vector_to_array_on_zero(self.psi_whole)
+        #if rank == 0 and len(out) == 1:
+        #    out = out[0]
+        #self.psi = self.psi_whole.getSubVector(self.is_)
+        #return out
 
     def mask(self):
         if self.mask:
@@ -460,7 +505,7 @@ class Integration_Tree:
                  parent=None,
                  I=None,
                  order=0,
-                 max_depth=8,
+                 max_depth=10,
                  dipole=None,
                  rel_error=0,
                  abs_error=0,
@@ -488,7 +533,7 @@ class Integration_Tree:
         else:
             self.error = error
 
-    def generate_children(self, to_convergence=True):
+    def generate_children(self, to_convergence):
         if self.children:
             return self.converged
         a, b = self.limits.a, self.limits.b
@@ -585,31 +630,33 @@ class Integration_Tree:
         # #logging.debug(f"is converged {self.converged}")
 
         # the integral of the whole range for this order:
-        self.is_converged(sum(Is))
-        self.I = sum(Is)
+        temp = sum(Is)
+        self.is_converged(temp)
+        self.I = temp
 
         if self.error is None:
+            logging.info(str(self.order) + " " * self.depth() + "self.error is empty, creating a zero_error")
             self.error = self.I.duplicate()
             self.error.set(0)
 
-        if not self.converged or not to_convergence:
-            e = self.error.copy()
-            e.scale(.5)
-            self.children = tuple(
-                Integration_Tree(
-                    (x0, x1),
-                    self.convergence_criteria,
-                    self.lower_order_tree,
-                    self.psi,
-                    self.integrand,
-                    self,
-                    I,
-                    order=self.order, 
-                    rel_error=self.rel_error/sets, 
-                    abs_error=self.abs_error/sets, 
-                    norm_error=self.norm_error/sets,
-                    error=e)
-                for x0, x1, I in zip(loc_sets, loc_sets[1:], Is))
+        logging.info(str(self.order) + " " * self.depth() + "need to propagate error forward")
+        e = self.error.copy()
+        e.scale(1/sets)
+        self.children = tuple(
+            Integration_Tree(
+                (x0, x1),
+                self.convergence_criteria,
+                self.lower_order_tree,
+                self.psi,
+                self.integrand,
+                self,
+                I,
+                order=self.order, 
+                rel_error=self.rel_error/sets, 
+                abs_error=self.abs_error/sets, 
+                norm_error=self.norm_error/sets,
+                error=e)
+            for x0, x1, I in zip(loc_sets, loc_sets[1:], Is))
         #logging.debug("made children")
 
         logging.info(str(self.order) + " " * self.depth() + "is converged {} for interval {} with error: {}".format(self.converged,self.limits, (self.rel_error, self.abs_error, self.norm_error)))
@@ -623,7 +670,7 @@ class Integration_Tree:
     def generate_children_to_convergence(self):
         #logging.debug(
             #f"entered 'generate_children_to_convergence' for {self}:")
-        if not self.generate_children() and self.depth() <= self.max_depth:
+        if not self.generate_children(to_convergence=True) and self.depth() <= self.max_depth:
             for child in self.children:
                 child.generate_children_to_convergence()
 
@@ -701,27 +748,25 @@ class Integration_Tree:
         #logging.debug(f"trying to find or make {interval} in {self}")
         if not isinstance(interval, Interval):
             interval = Interval(interval)
+
         if interval not in self.limits:
             raise IndexError("interval: {interval} not below this node".format(interval))
-        if interval == self.limits:
-            #logging.debug(f"found as self returning breadth_first_sum")
+        elif interval == self.limits:
+            #logging.info("found as self returning breadth_first_sum")
             return self.breadth_first_sum()
-        elif not self.children:
-            self.generate_children(to_convergence=False)
+        else:
+            if self.children is None:
+                self.generate_children(to_convergence=False)
 
-        #logging.debug(
-        #     f"trying to find or make {interval} in {list(map(lambda x: x.limits, self.children))}"
-        # )
-        for child in self.children:
-            if interval in child.limits:
-                return child.find_or_make_child(interval)
+            for child in self.children:
+                if interval in child.limits:
+                    return child.find_or_make_child(interval)
 
-
-        # it isn't in the limits of the children, but it is in the limits of self.
-        # so, we need to ask
-        return sum(
-            child.find_or_make_child(child.limits.intersection(interval))
-            for child in self.children)
+            # it isn't in the limits of the children, but it is in the limits of self.
+            # so, we need to ask
+            return sum(
+                child.find_or_make_child(child.limits.intersection(interval))
+                for child in self.children)
 
         # raise IndexError(
         #     f"interval: {interval} failed, not in {self.children[0].limits} or {self.children[1].limits}, for node: {self!r}"
@@ -783,6 +828,8 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, mask, or
     order_ = order
 
     def convergence_criteria(Ia, Ib, interval, H = None):
+        if Ia is Ib:
+            logging.info("Ia and Ib are the same... huh?")
         #logging.debug(
             #f"entering 'convergence_cirteria' with Ia: {Ia}, Ib: {Ib}")
         #logging.debug(f"Ia: ")
@@ -805,6 +852,9 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, mask, or
         #logging.debug(print_vec(error))
         error.abs()
         abs_error_vec = error.copy()
+        if mask_ is not None:
+            # we mask out things we don't care about the error of.'
+            error.pointwiseMult(error, mask_)
         i_abs, m_abs = error.max()
         avg_abs = error.sum()
         norm_abs = error.norm()
@@ -816,7 +866,6 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, mask, or
         #norm_abs = error.norm()
         #logging.debug("i_scaled:{}, m_scaled{}, avs_abs:{}, norm_abs:{}".format(i_abs,m_abs,avg_abs,norm_abs))
 
-        #logging.debug(print_vec(error))
         error /= abs(Ia)
         array = error.getArray()
         array = np.nan_to_num(array)
@@ -826,8 +875,9 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, mask, or
         [nonzero, MPI.INT],
         op=MPI.SUM)
 
+        #logging.info("array: {}".format(array))
         error.setArray(array)
-        logging.debug("nonzero: {}".format(nonzero))
+        #logging.info("nonzero: {}".format(nonzero))
         #logging.debug(print_vec(error))
         i_rel, m_rel = error.max()
         avg_rel = error.sum() / nonzero
@@ -847,18 +897,18 @@ def convergence_criteria_gen(err_goal_rel, err_goal_abs, err_goal_norm, mask, or
                   logging.info(
                      "max relative error for {} is {}, average is {} and norm is {} goal is {}".format(interval,m_rel,avg_rel,norm_rel,err_goal_rel))
                   logging.info("max absolute error for {} is {} compared to max {} is {}, average is {} and norm is {} goal is {}".format(interval, m_abs, m, m_abs/m, avg_abs, norm_abs, err_goal_abs))
-        if mask_ is not None:
-            error.pointwiseMult(error, mask_)
-            i, m_rel = error.max()
-            avg_rel = error.sum() / error.size
-            norm_rel = error.norm()
-            if rank == 0:
-                if prototype_index is not None:
-                    loc_ = prototype_index.get_level_values("n")[
-                      i], prototype_index.get_level_values("l")[i]
-                    logging.info(
-                      "after mask, max error for {interval} is {m_rel} at {loc_}, average error is: {avg_rel} and norm is {norm_rel}".format(interval=interval, m_rel=m_rel, loc_=loc_, avg_rel=avg_rel, norm_rel=norm_rel) +
-                      "  err_goal is {err_goal_rel}".format(err_goal_rel=err_goal_rel))
+#        if mask_ is not None:
+#            error.pointwiseMult(error, mask_)
+#            i, m_rel = error.max()
+#            avg_rel = error.sum() / error.size
+#            norm_rel = error.norm()
+#            if rank == 0:
+#                if prototype_index is not None:
+#                    loc_ = prototype_index.get_level_values("n")[
+#                      i], prototype_index.get_level_values("l")[i]
+#                    logging.info(
+#                      "after mask, max error for {interval} is {m_rel} at {loc_}, average error is: {avg_rel} and norm is {norm_rel}".format(interval=interval, m_rel=m_rel, loc_=loc_, avg_rel=avg_rel, norm_rel=norm_rel) +
+#                      "  err_goal is {err_goal_rel}".format(err_goal_rel=err_goal_rel))
         if math.isnan(m_rel):
             raise Exception("nan!")
         
@@ -877,7 +927,8 @@ def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs, err_goal_n
     #objgraph.show_growth(limit=10)
 
     I_of_n = OrderedDict()
-
+    #if nmaxes is None:
+    #    nmaxes = [None for _ in psis]
     # this allows us to generalize the algorithm without special cases.
     if 0 not in I_of_n:
         I_of_n[0] = DummyDict(psis[0])
@@ -904,10 +955,11 @@ def recursive_integrate(fs, psis, limits, err_goal_rel, err_goal_abs, err_goal_n
     for o, psi in zip(count(1), psis[1:]):
         psi.psi += I_of_n[o].breadth_first_sum()
         error = I_of_n[o].breadth_first_error_sum()
-        psi.error[0] += error[0]
-        psi.error[1] += error[1]
-        psi.error[2] += error[2]
+        #psi.error[0] += error[0]
+        #psi.error[1] += error[1]
+        #psi.error[2] += error[2]
         psi.error_vec += error[3]
+        psi.find_errors()
         logging.info("I_of_n[o]: {}".format(I_of_n[o]))
         logging.info("psi_{}: \n{}".format(o, psi.print_error_vec()))
         logging.info("error: {}".format(error))
@@ -1012,8 +1064,8 @@ class gen_integrand:
         #         f"integrand: n = {n}, time = {t}, dt = {self.dt}, ef = {ef}, in_vec = {psi.size}, Hl= {self.psil.H.size}, Hr = {self.psir.H.size}")
         self.v = perturb_order_petsc(psi, self.D, self.psil.H, self.psir.H, self.v, ef,
                                      t) * self.dt
-        if self.psil.mask is not None:
-            self.v.pointwiseMult(self.v, self.psil.mask)
+        #if self.psil.mask is not None:
+            #self.v.pointwiseMult(self.v, self.psil.mask)
         # #logging.debug(f"integrand: ")
         # #logging.debug(print_vec(vv))
         #logging.debug(f"leaving 'integrand'")
@@ -1054,6 +1106,7 @@ def run_perturbation_calculation_recurse(D,
         with Timer(verbose=True) as timeit:
             psis = recursive_integrate(integrands, psis,
                                        Interval(i - steps, i), relative_error, absolute_error, norm_error)
+        [psi.find_errors() for psi in psis]
 
         norms = [p.psi_whole.norm() for p in psis]
         if (i % 1 == 0 or i in zero_indices) and rank == 0:
@@ -1104,16 +1157,21 @@ def run_perturbation_calculation_recurse(D,
 @click.option("--absolute_error", type=float, default=None)
 @click.option("--mask_absorber_power", type=float, default=2)
 @click.option("--max_step", type=int, default=None)
+@click.option("--nmax", nargs=3, type=int, default=None)
 @click.option("--dense/--not_dense", default=False)
 @click.argument("other_args", nargs=-1, type=click.UNPROCESSED)
-def setup_and_run(hamiltonian_folder, efield_folder, out_file, key, dense, other_args, mask_absorber_power, **options):
+def setup_and_run(hamiltonian_folder, efield_folder, out_file, key, dense, other_args, mask_absorber_power, nmax, **options):
 
     logging.basicConfig(filename="log_" + str(rank) + key  + ".log",
         format="[{}]:".format(rank) + '%(levelname)s:%(message)s', level=logging.INFO)
-    #logging.debug(f"rank: {rank} started")
+    logging.info("nmax: {}".format(nmax))
+    if len(nmax) < 4:
+        nmax = [None for _ in range(0,4-len(nmax))] + list(nmax)
+    logging.info("nmax: {}".format(nmax))
+    options["nmax"] = nmax
     options.update(get_efield(efield_folder))
     #logging.debug(f"rank: {rank} got efield")
-    options.update(initialize_objects(hamiltonian_folder, dense=dense, mask_absorber_power=mask_absorber_power))
+    options.update(initialize_objects(hamiltonian_folder, dense=dense, mask_absorber_power=mask_absorber_power, nmax=nmax))
     #logging.debug(f"rank: {rank} initialized objects")
     if rank == 0:
         print("zeros: {}".format(options['zero_indices']))
